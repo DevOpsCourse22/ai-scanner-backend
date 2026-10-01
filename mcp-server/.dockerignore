@@ -1,0 +1,13 @@
+.venv/
+reports/
+tests/
+.claude/
+.mcp.json
+.gitignore
+Dockerfile
+.dockerignore
+**/__pycache__/
+*.egg-info/
+example_prompt.txt
+build.ps1
+build.sh

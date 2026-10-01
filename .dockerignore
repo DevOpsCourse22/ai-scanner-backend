@@ -1,0 +1,16 @@
+# review-api's build context is this folder. The image needs pyproject.toml,
+# README.md, src/ and config/api.example.yaml — nothing else.
+tests/
+examples/
+k8s/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+build/
+# A local config may point at private hosts; the image ships the example.
+config/api.yaml
+config/api.json
+.env
+*.ps1
+*.sh

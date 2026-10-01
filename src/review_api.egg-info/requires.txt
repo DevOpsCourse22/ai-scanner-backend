@@ -1,0 +1,6 @@
+code-review-mcp
+flask<4,>=3.0
+pyyaml<7,>=6.0
+
+[dev]
+pytest>=8.0

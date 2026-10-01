@@ -1,0 +1,2 @@
+This file has a non-reviewable extension (.txt) and must NOT appear in the
+manifest. It exists to prove the extension allowlist filtering works.

@@ -1,0 +1,35 @@
+[project]
+name = "code-review-mcp"
+version = "0.1.0"
+description = "MCP server that reviews GitHub repos with an LLM, plus the shared review pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    # UPPER BOUND IS LOAD-BEARING. mcp 2.0 is a breaking redesign: it removed
+    # `mcp.server.fastmcp` (the FastMCP class this server is built on) in
+    # favour of a new `mcp.server.mcpserver` API. Without the bound, a fresh
+    # `pip install` on a teammate's machine resolves to 2.x and the server
+    # dies at import with "No module named 'mcp.server.fastmcp'".
+    # Verified working: 1.28.1. Lift this only together with a port.
+    "mcp>=1.2.0,<2",
+    # Verified working: 2.44.0. Major bound is defensive, not a known break.
+    "openai>=1.40.0,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+code-review-mcp = "code_review_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Tests import each other as plain modules (test_findings_intake reuses
+# test_dummy_repo's fixture builder), so the tests directory must be on
+# sys.path — that is what "rootdir"-style prepend importmode gives us.
+testpaths = ["tests"]

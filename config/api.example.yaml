@@ -1,0 +1,226 @@
+# Review API configuration.
+#
+#   copy backend/config/api.example.yaml -> backend/config/api.yaml
+#
+# You should not need to edit this file to run the project on a new machine.
+# Two mechanisms keep machine-specific values out of it:
+#
+#   1. ${VAR} and ${VAR:-fallback} are expanded from the environment when the
+#      file is read. Put your values in a .env file (copy .env.example) or
+#      export them; the committed config stays identical for everyone.
+#      A ${VAR} with NO fallback that is not set is a startup error, on
+#      purpose — better than discovering it in the middle of a review.
+#   2. Relative paths resolve against THIS FILE's directory, so it does not
+#      matter whether you launch from the repository root or from backend/.
+#
+# NEVER put an LLM API key in here. A provider names the ENVIRONMENT VARIABLE
+# that holds its key (api_key_env); the key is read at call time. That is what
+# keeps this file safe to commit.
+
+# ---------------------------------------------------------------- server ----
+host: ${REVIEW_API_HOST:-127.0.0.1}   # localhost unless TLS + auth sit in front
+port: ${REVIEW_API_PORT:-8000}
+debug: false
+
+# Reports, checkpoints and findings files. Shared with the MCP server, so both
+# front ends see the same reports and can resume each other's interrupted
+# reviews. ../../reports = the repository-root reports/ folder.
+output_dir: ${REVIEW_API_OUTPUT_DIR:-../../reports}
+
+# No UI settings: this API serves no pages. The test console is its own
+# service (frontend/, image review-console). An older copy of this file may
+# still contain `frontend_dir:` — it is ignored with a warning, not an error.
+
+# Optional shared secret. When set, every /api/v1/* call must send
+# X-API-Key: <value>. Leave empty for local-only use; SET IT before exposing
+# the API on a network.
+api_key: ${REVIEW_API_KEY:-}
+
+# Browser origins allowed to call the API (the demo UI). Narrow this if the
+# API is reachable from anywhere but your own machine.
+cors_origins: ["*"]
+
+# Environment variable consulted for private-repo clones when a request does
+# not carry its own access_token.
+github_token_env: GITHUB_TOKEN
+
+# ------------------------------------------------------------- providers ----
+# Each entry is an LLM endpoint the API can send a review to. `location` is
+# advisory but important: it tells an operator whether code leaves the
+# premises. Anything OpenAI-compatible works with kind: openai_compatible —
+# that covers LM Studio, Ollama, vLLM, Google AI Studio, OpenAI, Groq,
+# Together, and OpenAI-compatible Azure deployments.
+#
+# Choose the default with REVIEW_API_DEFAULT_PROVIDER (or the .env file)
+# rather than editing this line: it is the one setting that differs between
+# the workstation with the GPU and everybody else's.
+
+default_provider: ${REVIEW_API_DEFAULT_PROVIDER:-lmstudio}
+
+providers:
+
+  # ---- ON-PREM ----
+  # LMSTUDIO_BASE_URL matters when the API runs in a container: LM Studio is
+  # on the HOST, reachable as http://host.docker.internal:1234/v1.
+  lmstudio:
+    kind: openai_compatible
+    location: on_prem
+    base_url: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
+    api_key_default: lm-studio        # LM Studio ignores auth
+    default_model: ${LMSTUDIO_MODEL:-google/gemma-4-26b-a4b-qat}
+    description: Local LM Studio (Gemma 4 26B)
+    # parallel: 1                     # raise only with parallel serving on
+
+  # WARNING — this one is NOT faster, despite the name and the smaller
+  # model. Measured 2026-09-21 on the project's own GPU: this 12B runs at
+  # ~70 tokens/sec, while the 26B above runs at ~110. The 26B's name says
+  # why: "a4b" is a mixture-of-experts activating ~4B parameters per token,
+  # against 12B active in this dense one. Smaller does not mean faster.
+  #
+  # Worse, SWITCHING between the two is itself dangerous while one GPU is
+  # behind this endpoint: naming a second model makes LM Studio load it
+  # ALONGSIDE the first, and two models on one card dropped throughput to
+  # 3.7 tokens/sec — a 30x slowdown from nothing but a changed request.
+  # See docs/ai-engine-slow-2026-09-21.md before pointing anything here.
+  lmstudio_fast:
+    kind: openai_compatible
+    location: on_prem
+    base_url: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
+    api_key_default: lm-studio
+    default_model: google/gemma-4-12b-qat
+    description: >
+      Same server, smaller model. Measured SLOWER than the 26B, not
+      faster - and loading both at once starves a single GPU.
+
+  # SHARED GPU OVER TAILSCALE — teammates use the model on someone else's
+  # machine. Tailscale gives that machine a stable 100.x.y.z address (and a
+  # MagicDNS name) that works from anywhere, with no port forwarding and no
+  # public exposure: only devices in the tailnet can reach it.
+  #
+  # Set ONE value in your .env — the address of the machine running LM Studio:
+  #     TAILSCALE_LMSTUDIO_HOST=100.x.y.z
+  # Find it on THAT machine with `tailscale ip -4`, or in the Tailscale admin
+  # console. A MagicDNS name (e.g. gpu-box.tailnet-name.ts.net) works too.
+  # The owner of that machine must also serve LM Studio on the network —
+  # see docs/18-team-setup-guide.md §4c for both sides.
+  lmstudio_tailscale:
+    kind: openai_compatible
+    location: on_prem
+    base_url: http://${TAILSCALE_LMSTUDIO_HOST:-tailscale-host-not-set}:${TAILSCALE_LMSTUDIO_PORT:-1234}/v1
+    api_key_default: lm-studio        # LM Studio ignores auth
+    default_model: ${LMSTUDIO_MODEL:-google/gemma-4-26b-a4b-qat}
+    description: LM Studio on a teammate's machine, reached over Tailscale
+    setup_hint: >
+      Set TAILSCALE_LMSTUDIO_HOST in .env to the Tailscale address of the
+      machine running LM Studio (run `tailscale ip -4` on that machine).
+      Check your own connection with `tailscale status`, then confirm the
+      endpoint answers: curl http://<that-address>:1234/v1/models
+      The machine's owner must enable "Serve on Local Network" in LM Studio's
+      Developer tab, or the port stays bound to their loopback only.
+      Full walkthrough: docs/18-team-setup-guide.md section 4c.
+
+  ollama:
+    kind: openai_compatible
+    location: on_prem
+    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}
+    api_key_default: ollama
+    default_model: qwen2.5-coder:14b
+    description: Local Ollama
+
+  vllm:
+    kind: openai_compatible
+    location: on_prem
+    base_url: ${VLLM_BASE_URL:-http://vllm.internal:8000/v1}
+    api_key_env: VLLM_API_KEY
+    default_model: Qwen/Qwen2.5-Coder-32B-Instruct
+    description: Self-hosted vLLM on the internal network
+
+  # ---- CLOUD ----
+  # Reminder: sending repository code to a cloud provider is a disclosure
+  # decision. The platform gates this on policy; here it is your call.
+
+  # THE PATH FOR TEAMMATES WITHOUT THE GPU WORKSTATION.
+  # Google AI Studio serves Gemma over an OpenAI-compatible endpoint, so the
+  # same model family as the on-prem default runs in the cloud with no code
+  # change — only "provider": "google_ai_studio" in the request.
+  #
+  #   1. Create a key at https://aistudio.google.com/apikey
+  #   2. Put GOOGLE_API_KEY=... in your .env (never in this file)
+  #   3. Ask the server which models that key can actually see:
+  #        GET /api/v1/health?probe=1&provider=google_ai_studio
+  #      then set GOOGLE_MODEL to one of the ids it returns. Gemma ids look
+  #      like "gemma-3-27b-it"; the probe is authoritative for your key and
+  #      region, so trust it over this comment.
+  google_ai_studio:
+    kind: openai_compatible
+    location: cloud
+    base_url: ${GOOGLE_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+    api_key_env: GOOGLE_API_KEY
+    default_model: ${GOOGLE_MODEL:-gemma-3-27b-it}
+    description: Google AI Studio — Gemma in the cloud (no local GPU needed)
+
+  openai:
+    kind: openai_compatible
+    location: cloud
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4o-mini
+    description: OpenAI (needs OPENAI_API_KEY in the environment)
+
+  groq:
+    kind: openai_compatible
+    location: cloud
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    default_model: llama-3.3-70b-versatile
+    description: Groq (needs GROQ_API_KEY)
+
+  azure_openai:
+    kind: openai_compatible
+    location: cloud
+    # Azure: use the OpenAI-compatible route of your deployment.
+    base_url: ${AZURE_OPENAI_BASE_URL:-https://YOUR-RESOURCE.openai.azure.com/openai/v1}
+    api_key_env: AZURE_OPENAI_API_KEY
+    default_model: gpt-4o
+    description: Azure OpenAI deployment
+
+# --------------------------------------------------------------- reviews ----
+default_mode: ${REVIEW_API_DEFAULT_MODE:-brief}       # quick | brief | deep
+
+default_persona: general
+
+# Named reviewer personas so callers ask for "security" instead of pasting a
+# system prompt. The API always appends its own safety and output rules.
+personas:
+  general: >
+    You are a senior software engineer performing a careful code review.
+    Weigh correctness, security, error handling and maintainability, and be
+    specific about where and why something is wrong.
+
+  security: >
+    You are an application security auditor. Hunt for injection, broken
+    authentication and authorization, unsafe deserialization, hardcoded
+    secrets, weak cryptography and missing input validation. Rate severity
+    honestly and explain exploitability.
+
+  secrets: >
+    You are a secrets-detection specialist. Report every credential, API
+    key, token, private key or connection string committed to the code, and
+    say what an attacker could do with each.
+
+  performance: >
+    You are a performance engineer. Look for needless work in hot paths,
+    N+1 queries, unbounded memory growth, blocking I/O on request paths and
+    missing caching or pagination.
+
+  maintainability: >
+    You are a tech-lead reviewing for long-term maintainability: dead code,
+    confusing names, functions doing too much, missing error handling,
+    duplicated logic and absent tests.
+
+# Review knobs handed to the pipeline (all optional; these mirror the
+# REVIEW_* environment variables the MCP server uses).
+review_defaults:
+  max_files: 500
+  brief_pack_chars: 12000
+  brief_file_cap: 1200

@@ -1,0 +1,36 @@
+[project]
+name = "review-api"
+version = "0.1.0"
+description = "Flask HTTP control plane for AI code review (cloud or on-prem LLMs)"
+requires-python = ">=3.10"
+dependencies = [
+    # The review pipeline itself lives in the sibling mcp-server component.
+    # It is NOT on PyPI, so install it first (or install both in one command):
+    #     pip install -e ./mcp-server -e ./backend
+    "code-review-mcp",
+    # Verified working: Flask 3.1.3, PyYAML 6.0.3. Major bounds keep a fresh
+    # install on a new machine resolving to what this code was tested against
+    # — see the mcp pin in ../mcp-server/pyproject.toml for why that matters.
+    "flask>=3.0,<4",
+    # Only needed for a YAML config file; a JSON config works without it.
+    "pyyaml>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# Only needed to run review-api in "kubernetes" execution mode (see
+# k8s_jobs.py). Local/dev mode (the default) never imports this.
+kubernetes = ["kubernetes>=29,<32"]
+
+[project.scripts]
+review-api = "review_api.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

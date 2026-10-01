@@ -1,0 +1,24 @@
+[project]
+name = "repo-scanner"
+version = "0.1.0"
+description = "Deterministic scanner: runs Semgrep and normalizes its output into the findings format review-api ingests"
+requires-python = ">=3.10"
+dependencies = [
+    "semgrep>=1.100",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+repo-scan = "repo_scanner.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

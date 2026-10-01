@@ -1,0 +1,17 @@
+# What never enters the build context.
+#
+# The Dockerfile only COPYs pyproject.toml and src/, so nothing here is
+# strictly required today. It exists for the day someone writes `COPY . .`,
+# and to keep the context small — the repository being scanned should
+# arrive as a mount at run time, never baked into the image.
+.venv/
+tests/
+*.findings.json
+reports/
+
+**/__pycache__/
+*.egg-info/
+.pytest_cache/
+
+Dockerfile
+.dockerignore
