@@ -4,12 +4,12 @@
 #
 # Build context is THIS folder. Two things come from outside it, each as a
 # NAMED build context rather than by widening the context to the whole
-# repository: the shared review engine (../mcp-server) and the deterministic
-# scanner tier (../scanner).
+# repository: the shared review engine (./mcp-server) and the deterministic
+# scanner tier (./scanner).
 #
 #     ./build.sh                                        # or .\build.ps1
-#     docker build --build-context mcp-server=../mcp-server \
-#                  --build-context scanner=../scanner -t review-api .
+#     docker build --build-context mcp-server=./mcp-server \
+#                  --build-context scanner=./scanner -t review-api .
 #
 # Forget either --build-context and the build stops at the matching step
 # below with a message saying so, instead of trying to pull an image by that
@@ -17,12 +17,12 @@
 
 # Placeholder, REPLACED by --build-context mcp-server=... when it is given.
 FROM python:3.12-slim AS mcp-server
-RUN echo "review-api: build with --build-context mcp-server=../mcp-server (or run ./build.sh)" >&2 \
+RUN echo "review-api: build with --build-context mcp-server=./mcp-server (or run ./build.sh)" >&2 \
     && exit 1
 
 # Placeholder, REPLACED by --build-context scanner=... when it is given.
 FROM python:3.12-slim AS scanner
-RUN echo "review-api: build with --build-context scanner=../scanner (or run ./build.sh)" >&2 \
+RUN echo "review-api: build with --build-context scanner=./scanner (or run ./build.sh)" >&2 \
     && exit 1
 
 FROM python:3.12-slim

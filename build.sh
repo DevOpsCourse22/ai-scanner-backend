@@ -36,8 +36,8 @@ REF="${REGISTRY:+${REGISTRY%/}/}${IMAGE}:${TAG}"
 
 # The shared review engine and the deterministic scanner tier both live
 # outside this folder; each arrives as a named build context.
-docker build --build-context mcp-server=../mcp-server \
-             --build-context scanner=../scanner \
+docker build --build-context mcp-server=./mcp-server \
+             --build-context scanner=./scanner \
              --tag "$REF" .
 echo "built:  $REF"
 
