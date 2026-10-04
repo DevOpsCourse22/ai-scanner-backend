@@ -2162,6 +2162,34 @@ def test_testing_a_service_lists_its_models(client, monkeypatch):
     assert body["reachable"] and body["models"] == ["a", "b"]
 
 
+def test_testing_anthropic_sends_its_native_models_headers(client, monkeypatch):
+    # Anthropic's /v1/models is not part of its OpenAI-compatible layer: it
+    # needs anthropic-version and x-api-key, or it answers 400.
+    from types import SimpleNamespace
+
+    from review_api import app as app_mod
+    seen = {}
+    listing = SimpleNamespace(models=SimpleNamespace(list=lambda: SimpleNamespace(
+        data=[SimpleNamespace(id="claude-sonnet-5-5")])))
+
+    def with_options(default_headers):
+        seen.update(default_headers)
+        return listing
+
+    monkeypatch.setattr(app_mod.llm, "make_client",
+                        lambda: SimpleNamespace(with_options=with_options))
+    body = client.post("/api/v1/llm/models", json={
+        "llm": {"preset": "anthropic", "api_key": "sk-ant-x"}}).get_json()
+    assert body["reachable"] and body["models"] == ["claude-sonnet-5-5"]
+    assert seen == {"anthropic-version": "2023-06-01", "x-api-key": "sk-ant-x"}
+
+
+def test_other_services_get_no_extra_models_headers():
+    from review_api.llm_presets import models_headers
+    assert models_headers("https://api.openai.com/v1", "k") == {}
+    assert models_headers("http://100.64.0.5:1234/v1", "k") == {}
+
+
 # ---------------- deleting a review ----------------
 
 def test_delete_removes_every_file_of_the_review_and_nothing_else(

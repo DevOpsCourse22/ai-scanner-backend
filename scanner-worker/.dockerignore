@@ -1,0 +1,10 @@
+# Only entrypoint.py enters the image from this folder; the engine and the
+# scanner come in as named build contexts (see Dockerfile).
+tests/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+README.md
+*.ps1
+*.sh
+.env

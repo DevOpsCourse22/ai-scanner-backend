@@ -62,6 +62,21 @@ PRESETS: dict[str, Preset] = {p.name: p for p in (
 )}
 
 
+# Anthropic's OpenAI-compatible layer covers chat completions, but GET
+# /v1/models is its native endpoint: it refuses a request without an
+# anthropic-version header ("anthropic-version: header is required") and
+# reads the key from x-api-key, not the Bearer header the OpenAI client
+# sends. Only the model list (Test connection in Settings) needs these.
+ANTHROPIC_VERSION = "2023-06-01"
+
+
+def models_headers(base_url: str, api_key: str) -> dict[str, str]:
+    """Extra headers listing a service's models needs, by its address."""
+    if base_url.startswith(PRESETS["anthropic"].base_url.rstrip("/")):
+        return {"anthropic-version": ANTHROPIC_VERSION, "x-api-key": api_key}
+    return {}
+
+
 class PresetError(ValueError):
     """The AI service choice cannot be used as given."""
 

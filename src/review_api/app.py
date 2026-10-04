@@ -65,7 +65,8 @@ from .config import (ApiConfig, ConfigError, EndpointError, check_endpoint_allow
                      is_loopback_host,
                      load_config, load_dotenv, normalize_endpoint)
 from . import review_state
-from .llm_presets import PRESETS, PresetError, parse_llm, public_presets
+from .llm_presets import (PRESETS, PresetError, models_headers, parse_llm,
+                          public_presets)
 from .jobs import ACTIVE
 from .k8s_jobs import STALE_PROGRESS_SECONDS, create_store
 from .prompts import build_prompt
@@ -335,7 +336,11 @@ def create_app(config_path: str | None = None,
         saved = (settings.lm_base_url, settings.lm_api_key)
         try:
             settings.lm_base_url, settings.lm_api_key = base_url, api_key
-            return sorted(m.id for m in llm.make_client().models.list().data)
+            client = llm.make_client()
+            headers = models_headers(base_url, api_key)
+            if headers:
+                client = client.with_options(default_headers=headers)
+            return sorted(m.id for m in client.models.list().data)
         finally:
             settings.lm_base_url, settings.lm_api_key = saved
 

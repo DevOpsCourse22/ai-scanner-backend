@@ -28,8 +28,8 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     # The shared review engine and the deterministic scanner tier both live
     # outside this folder; each arrives as a named build context.
-    docker build --build-context "mcp-server=./mcp-server" `
-                 --build-context "scanner=./scanner" `
+    docker build --build-context "mcp-server=../mcp-server" `
+                 --build-context "scanner=../scanner" `
                  --tag $Ref .
     if ($LASTEXITCODE -ne 0) { throw "docker build failed (exit $LASTEXITCODE)" }
     Write-Host "built:  $Ref"

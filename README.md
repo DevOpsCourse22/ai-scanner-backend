@@ -9,11 +9,11 @@ progress, restart a failed run, and fetch, list or delete reports.
 that used to be served here is its own microservice now —
 [review-console](../frontend) — which proxies `/api/` to this one.
 
-> 📖 **Calling it from code: [API-CLIENT-GUIDE.md](API-CLIENT-GUIDE.md)** —  
-- Every endpoint with real request/response pairs, error handling, and
-- Runnable clients in [`examples/`](examples) (Python, Node, curl) ·
-- Design and rationale: [17-review-api.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/17-review-api.md) ·
-- Deploying to Kubernetes: [21-kubernetes-manifests-guide.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/21-kubernetes-manifests-guide.md)
+> 📖 **Calling it from code: [API-CLIENT-GUIDE.md](API-CLIENT-GUIDE.md)** —
+> every endpoint with real request/response pairs, error handling, and
+> runnable clients in [`examples/`](examples) (Python, Node, curl) ·
+> Design and rationale: [17-review-api.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/17-review-api.md) ·
+> Deploying to Kubernetes: [21-kubernetes-manifests-guide.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/21-kubernetes-manifests-guide.md)
 
 ---
 
@@ -34,24 +34,23 @@ that used to be served here is its own microservice now —
 | Replicas | **one** — in-memory job registry, one review at a time |
 | Depends on | the shared review engine in [`../mcp-server`](../mcp-server) (embedded at build time) |
 
-```mermaid
-flowchart TD
-   client["Client<br/>review-console, gateway, CI, or curl"]
-   client -->|REST /api/v1| api["review-api<br/>validate request · build prompt · select AI provider"]
-   api --> mode{"REVIEW_API_EXECUTION_MODE"}
-   mode -->|local| local["Background worker<br/>shared review pipeline"]
-   mode -->|kubernetes| job["Kubernetes Job<br/>scanner-worker image"]
-   local --> clone["Clone selected repository revision"]
-   job --> clone
-   clone --> scan["Semgrep · Gitleaks · Trivy"]
-   scan --> findings["Deterministic scanner findings"]
-   findings --> review["AI review<br/>quick · brief · deep"]
-  review --> output["Reports and resume data<br/>/reports/{id}.json + .md"]
+```
+client (review-console / gateway / CI / curl)
+   │  REST /api/v1
+   ▼
+review-api ── config.py ── providers: on-prem (LM Studio / Ollama / vLLM)
+   │                                  cloud   (Google AI Studio / OpenAI / …)
+   │  prompts.py  consolidate the request -> ONE system prompt
+   │  jobs.py     job store + worker thread + per-review credential
+   ▼
+code_review_mcp.pipeline.run_review()      ← shared with the MCP server
+   clone -> manifest -> review (quick|brief|deep) -> checkpoint -> report
+   ▼
+/reports/<review_id>.json + .md    (+ <review_id>.partial.json while running)
 ```
 
-Both execution modes use the shared review engine. Scanner findings remain
-the evidence for the AI review; findings, progress, and checkpoints are saved
-alongside the reports in `/reports`.
+It **shares the pipeline with the MCP server rather than reimplementing it**,
+so crash recovery behaves identically whichever door a review came through.
 
 ---
 
@@ -73,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Registry ghcr.io/<owner> -Pu
 ```
 
 `REGISTRY` and `TAG` can also come from the environment. Pushing needs a
-prior `docker login  -u <registry>` — the script never touches credentials, and
+prior `docker login  -u <username>` — the script never touches credentials, and
 it refuses `--push` without a registry, because an unqualified name would be
 pushed to Docker Hub's official `library/` namespace.
 
@@ -88,17 +87,25 @@ message saying so, instead of trying to pull an image called `mcp-server`.
 
 ---
 
-## Run it
+## How to Run
 
 **As a Python process** (development), from the repository root:
 
-```powershell
+***Linux OS***
+```bash
 pip install -e ./mcp-server[dev] -e ./backend[dev]
-copy backend\config\api.example.yaml backend\config\api.yaml
-python -m review_api.app --config backend/config/api.yaml
+cp config\api.example.yaml config\api.yaml
+python -m review_api.app --config config/api.yaml
 ```
 
-**As a container:**
+***Windoes OS***
+```powershell
+pip install -e ./mcp-server[dev] -e ./backend[dev]
+copy config\api.example.yaml config\api.yaml
+python -m review_api.app --config config/api.yaml
+```
+
+**As a Docker Container:**
 
 ```bash
 docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/reports:/reports" review-api
@@ -109,12 +116,12 @@ starts both services — the API on <http://localhost:8000> (JSON only) and the
 console on <http://localhost:8090>.
 
 **On Kubernetes:** no manifests ship with this service on purpose — writing
-them is part of the course. [docs/21](../../docs/21-kubernetes-manifests-guide.md)
+them is part of the course. [21-kubernetes-manifests-guide.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/21-kubernetes-manifests-guide.md)
 walks through what this image needs from them, the traps, and how to verify.
 
 Then check it:
 
-```bash
+```text
 curl http://127.0.0.1:8000/                          # what this service is
 curl http://127.0.0.1:8000/readyz                    # can it do its job?
 curl "http://127.0.0.1:8000/api/v1/health?probe=1"   # can it reach the model?
