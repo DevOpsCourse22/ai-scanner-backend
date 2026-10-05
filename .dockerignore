@@ -1,16 +1,28 @@
-# review-api's build context is this folder. The image needs pyproject.toml,
-# README.md, src/ and config/api.example.yaml — nothing else.
+# No image is built from the repository root any more: every service has its
+# own folder and its own build context (backend/, frontend/, mcp-server/).
+# Kept only so an accidental `docker build .` here stays small.
+Folders:
+.git/
+.venv/
+venv/
+reports/
+docs/
 tests/
 examples/
 k8s/
+.claude/
+build/
 .pytest_cache/
 **/__pycache__/
 **/*.pyc
 **/*.egg-info/
-build/
-# A local config may point at private hosts; the image ships the example.
-config/api.yaml
-config/api.json
+**/node_modules/
+
+Files:
 .env
 *.ps1
 *.sh
+
+# A local config may point at private hosts; the image ships the example.
+config/api.yaml
+config/api.json

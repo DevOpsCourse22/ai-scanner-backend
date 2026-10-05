@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Review output: reports, their markdown renders, notes, and the
+# <id>.partial.json crash checkpoints. Shared by both front ends.
+reports/
+
+# Local secrets for docker compose and the setup scripts.
+# Copy .env.example -> .env; NEVER commit the filled-in copy.
+.env
+
+# Word/Office lock files (created while a .docx is open).
+~$*
+
+# Export bundles of docs/ for submission — the canonical tree is docs/ itself.
+docs/Zipped/
+docs/Zipped.zip
+
+# Local API config (copy from backend/config/api.example.yaml; holds
+# host-specific values such as the LLM base URL).
+backend/config/api.yaml
+backend/config/api.json

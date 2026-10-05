@@ -1,0 +1,25 @@
+# Normalise line endings so the same checkout works on Windows, Linux and
+# macOS. This repository is developed on Windows and run on all three.
+* text=auto
+
+# Shell scripts and Dockerfiles MUST keep LF. A CRLF shebang makes Linux
+# report "bad interpreter: /usr/bin/env bash^M", and CRLF inside a RUN line
+# breaks the same way in a container.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.dockerignore  text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+# Sourced by /bin/sh inside the console image, and rendered into nginx
+# config there: a CR would end up in a variable or a directive.
+*.envsh         text eol=lf
+*.template      text eol=lf
+*.conf          text eol=lf
+
+# PowerShell is the Windows side of the same scripts; CRLF is correct there.
+*.ps1           text eol=crlf
+
+# Binary assets: never touch them.
+*.png           binary
+*.docx          binary
+*.zip           binary

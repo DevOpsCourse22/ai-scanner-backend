@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "code-review": {
+      "command": "C:\\Projects\\Final-Project\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "code_review_mcp.server"],
+      "env": {
+        "LMSTUDIO_BASE_URL": "http://localhost:1234/v1",
+        "REVIEW_ENABLE_BLOCKING": "1"
+      }
+    },
+    "code-review-docker": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--add-host=host.docker.internal:host-gateway",
+        "-v", "C:\\Projects\\Final-Project\\reports:/reports",
+        "-e", "GITHUB_TOKEN",
+        "code-review-mcp:latest"
+      ]
+    }
+  }
+}
