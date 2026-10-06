@@ -1,2 +1,0 @@
-[console_scripts]
-review-api = review_api.app:main

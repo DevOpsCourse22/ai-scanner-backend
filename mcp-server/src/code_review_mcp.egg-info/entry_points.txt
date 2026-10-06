@@ -1,2 +1,0 @@
-[console_scripts]
-code-review-mcp = code_review_mcp.server:main

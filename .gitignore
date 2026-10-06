@@ -23,13 +23,13 @@ docs/Zipped.zip
 # Word/Office lock files (created while a .docx is open).
 ~$*
 
-Files:
+# Keys and local secrets.
 *.pem
 *.key
 .env
 
-# Local API config (copy from backend/config/api.example.yaml; holds
+# Local API config (copy from config/api.example.yaml; holds
 # host-specific values such as the LLM base URL).
-backend/config/api.yaml
-backend/config/api.json
+config/api.yaml
+config/api.json
 
