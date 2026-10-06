@@ -1,7 +1,14 @@
-# No image is built from the repository root any more: every service has its
-# own folder and its own build context (backend/, frontend/, mcp-server/).
-# Kept only so an accidental `docker build .` here stays small.
-Folders:
+# review-api's build context is the ROOT of this repository (build.sh runs
+# `docker build ... .` here). The image needs pyproject.toml, README.md, src/
+# and config/api.example.yaml, nothing else.
+# mcp-server/ and scanner/ reach the build as NAMED build contexts
+# (--build-context mcp-server=./mcp-server), which read their own
+# .dockerignore, so they are left out of this one. scanner-worker/ is a
+# separate image with its own context (scanner-worker/build.sh).
+mcp-server/
+scanner/
+scanner-worker/
+security-tests/
 .git/
 .venv/
 venv/
@@ -18,7 +25,7 @@ build/
 **/*.egg-info/
 **/node_modules/
 
-Files:
+# Local secrets and scripts never belong in the image.
 .env
 *.ps1
 *.sh
