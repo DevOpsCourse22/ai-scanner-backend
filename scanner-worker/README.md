@@ -3,11 +3,11 @@
 One review, run to completion as a **Kubernetes Job**, then exit.
 
 The combined image described in
-[docs/job-container-contract.md](../../docs/job-container-contract.md): the
+[docs/job-container-contract.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/job-container-contract.md): the
 deterministic scanner tier ([../scanner](../scanner): Semgrep + Gitleaks +
 Trivy) and the review engine ([../mcp-server](../mcp-server): clone, AI
 enrichment, checkpoint/resume, reports) in one container. review-api's
-`kubernetes` execution mode (`backend/src/review_api/k8s_jobs.py`) creates one
+`kubernetes` execution mode (`src/review_api/k8s_jobs.py`) creates one
 Job per review from this image and polls it.
 
 [entrypoint.py](entrypoint.py) is a thin wrapper around
@@ -26,7 +26,7 @@ Job env ──► entrypoint.py ──► run_review()
                                 +  the same line in /reports/<id>.error.json
 ```
 
-The full interface is [docs/job-container-contract.md](../../docs/job-container-contract.md) (v2).
+The full interface is [docs/job-container-contract.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/job-container-contract.md) (v2).
 
 ## Inputs (environment)
 

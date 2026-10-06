@@ -13,8 +13,8 @@ hand. Runnable clients live in [`examples/`](examples):
 | [`examples/review.sh`](examples/review.sh) | `./examples/review.sh <repo-url>` — curl + jq |
 
 > Related: [README.md](README.md) (this component) ·
-> [../docs/17-review-api.md](../../docs/17-review-api.md) (design and rationale) ·
-> [../docs/18-team-setup-guide.md](../../docs/18-team-setup-guide.md) (getting a
+> [../docs/17-review-api.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/17-review-api.md) (design and rationale) ·
+> [../docs/18-team-setup-guide.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/18-team-setup-guide.md) (getting a
 > server running).
 
 ---
@@ -455,7 +455,7 @@ REVIEW_API_URL=http://100.93.244.39:8000 REVIEW_API_KEY=... python examples/revi
 ```
 
 The host has to expose the API for that to work —
-[docs/18 §6](../../docs/18-team-setup-guide.md#6-sharing-one-api--and-its-reports--with-the-team)
+[docs/18 §6](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/18-team-setup-guide.md#6-sharing-one-api--and-its-reports--with-the-team)
 covers both sides. Note what a shared API implies for this section: anyone
 who can reach it can `DELETE` any report on it, so it should have an
 `X-API-Key` set.
@@ -582,7 +582,7 @@ request, `2` if the API is unreachable.
     REVIEW_API_URL: http://100.83.14.22:8000     # over Tailscale
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   run: |
-    python backend/examples/review_client.py \
+    python examples/review_client.py \
       "https://github.com/${{ github.repository }}" \
       --review-id "ci-${{ github.run_id }}" \
       --mode brief --wait --markdown

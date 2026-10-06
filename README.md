@@ -7,7 +7,7 @@ progress, restart a failed run, and fetch, list or delete reports.
 
 **It is an API and nothing else.** No UI, no static files. The test console
 that used to be served here is its own microservice now —
-[review-console](../frontend) — which proxies `/api/` to this one.
+[review-console](https://github.com/hadsahar/DevSecOps-Final-Project/tree/main/Code-Review-MCP/frontend) — which proxies `/api/` to this one.
 
 > 📖 **Calling it from code: [API-CLIENT-GUIDE.md](API-CLIENT-GUIDE.md)** —
 > every endpoint with real request/response pairs, error handling, and
@@ -22,7 +22,7 @@ that used to be served here is its own microservice now —
 | | |
 |---|---|
 | Image | `review-api` — built from **this folder** |
-| Build | [`build.sh`](build.sh) / [`build.ps1`](build.ps1), or `docker build --build-context mcp-server=../mcp-server .` |
+| Build | [`build.sh`](build.sh) / [`build.ps1`](build.ps1), or `docker build --build-context mcp-server=./mcp-server --build-context scanner=./scanner .` |
 | Port | `8000/TCP` |
 | Runs as | uid/gid **10001** (non-root, numeric) |
 | Liveness | `GET /healthz` — no auth, checks nothing external |
@@ -32,7 +32,7 @@ that used to be served here is its own microservice now —
 | Configuration | environment variables (below), over the baked `config/api.example.yaml` |
 | Needs to reach | the LLM endpoint · `github.com:443` |
 | Replicas | **one** — in-memory job registry, one review at a time |
-| Depends on | the shared review engine in [`../mcp-server`](../mcp-server) (embedded at build time) |
+| Depends on | the shared review engine in [`mcp-server/`](mcp-server) (embedded at build time) |
 
 ```
 client (review-console / gateway / CI / curl)
@@ -91,16 +91,16 @@ message saying so, instead of trying to pull an image called `mcp-server`.
 
 **As a Python process** (development), from the repository root:
 
-***Linux OS***
+***Linux / macOS***
 ```bash
-pip install -e ./mcp-server[dev] -e ./backend[dev]
+pip install -e ./mcp-server[dev] -e ./scanner -e .[dev]
 cp config\api.example.yaml config\api.yaml
 python -m review_api.app --config config/api.yaml
 ```
 
-***Windoes OS***
+***Windows***
 ```powershell
-pip install -e ./mcp-server[dev] -e ./backend[dev]
+pip install -e ./mcp-server[dev] -e ./scanner -e .[dev]
 copy config\api.example.yaml config\api.yaml
 python -m review_api.app --config config/api.yaml
 ```
@@ -205,7 +205,7 @@ variables are the configuration**. Outside a container, copy it to
 | `REVIEW_SKIP_GENERATED` | `1` | Skip minified and generated files, and report them as skipped |
 | `REVIEW_PARALLEL` | `1` | Concurrent LLM requests |
 | `REVIEW_STALL_TIMEOUT` | `300` | Seconds without a token before a request counts as stalled |
-| `REVIEW_MAX_FILES`, `REVIEW_MAX_FILE_BYTES`, `REVIEW_MAX_CHUNK_CHARS`, `REVIEW_MAX_TOKENS`, … | see [`mcp-server`](../mcp-server) | Limits |
+| `REVIEW_MAX_FILES`, `REVIEW_MAX_FILE_BYTES`, `REVIEW_MAX_CHUNK_CHARS`, `REVIEW_MAX_TOKENS`, … | see [`mcp-server`](mcp-server) | Limits |
 
 **Secrets** — `REVIEW_API_KEY`, `GITHUB_TOKEN` and every `*_API_KEY` — come
 from the environment only, never from a file you commit.
@@ -260,7 +260,7 @@ a token, the server-wide `GITHUB_TOKEN` is used.
   identity. OIDC and per-repository authorization are platform work.
 - **Not meant to be public.** It clones repositories, accepts tokens and
   deletes reports. Keep it on `127.0.0.1` (compose), on a tailnet address
-  ([docs/18 §6](../../docs/18-team-setup-guide.md)), or behind a ClusterIP
+  ([docs/18 §6](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/18-team-setup-guide.md)), or behind a ClusterIP
   Service — and set `REVIEW_API_KEY` before it is reachable by anyone else.
   At startup it prints whether it is reachable from the network, and warns
   loudly if it is and has no key.
@@ -277,7 +277,7 @@ a token, the server-wide `GITHUB_TOKEN` is used.
 
 ```powershell
 # from the repository root
-.venv\Scripts\python.exe -m pytest backend/tests -q
+.venv\Scripts\python.exe -m pytest tests -q
 ```
 
 | File | Covers |
@@ -287,5 +287,5 @@ a token, the server-wide `GITHUB_TOKEN` is used.
 | `test_image.py` | the Dockerfile (non-root, no console, named context, healthcheck), the build script, the compose service |
 
 These tests reuse the dummy-repo fixture from the
-[mcp-server component](../mcp-server/tests/fixtures/dummy_repo); see
+[mcp-server component](mcp-server/tests/fixtures/dummy_repo); see
 [`tests/conftest.py`](tests/conftest.py).

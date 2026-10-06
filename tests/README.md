@@ -54,27 +54,24 @@ Docker Compose configuration.
 - Python 3.10 or newer.
 - The backend and shared `mcp-server` Python packages, plus the backend's
   development dependency (`pytest`).
-- The original `Code-Review-MCP` checkout layout for the shared fixtures and
-  deployment-artifact checks.
+- `mcp-server/` in this repository: `conftest.py` reuses its dummy-repo
+  fixture from `mcp-server/tests`.
 
-The suite expects these paths to be siblings in the original checkout:
-`backend/`, `mcp-server/`, `frontend/`, `scanner/`, and
-`docker-compose.yml`. In particular, `conftest.py` looks for the shared MCP
-fixture under `mcp-server/tests`, and `test_image.py` reads the root Compose
-file and other components' build scripts. Since the backend has been moved
-into its own repository, the tests cannot currently run from the extracted
-`ai-scanner-backend` repository alone. Use the original monorepo layout or
-restore an equivalent layout before running them; no test code is changed by
-this README.
+The suite runs from this repository alone. `test_image.py` checks this
+repository's Dockerfile and build scripts (root, `mcp-server/`,
+`scanner-worker/`). Its four Compose checks need `docker-compose.yml`, which
+stayed in the umbrella repository (hadsahar/DevSecOps-Final-Project,
+`Code-Review-MCP/`); here they are skipped.
 
 ## Run the Tests
 
-From the root of a checkout with the expected monorepo layout, install the
-editable packages and run pytest:
+From the root of this repository, install the editable packages and run
+pytest (Semgrep, a dependency of `scanner`, does not install on Windows: there
+use `pip install --no-deps -e ./scanner`, the tests fake the scanners anyway):
 
 ```bash
-python -m pip install -e './mcp-server[dev]' -e './backend[dev]'
-python -m pytest backend/tests
+python -m pip install -e './mcp-server[dev]' -e './scanner' -e '.[dev]'
+python -m pytest tests
 ```
 
 The Kubernetes tests use fakes and do not need a cluster. The API tests mock

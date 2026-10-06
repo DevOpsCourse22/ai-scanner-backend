@@ -5,7 +5,7 @@ GitHub repositories using an LLM — locally with **LM Studio**, or any
 OpenAI-compatible endpoint. Packaged as a portable Docker image.
 
 This component also owns **`pipeline.py`**, the review runner that the
-[review-api microservice](../backend) embeds too. Clone, checkpointing,
+[review-api microservice](..) embeds too. Clone, checkpointing,
 resume and report writing therefore exist exactly once, and a review
 interrupted in one front end can be resumed from the other.
 
@@ -17,13 +17,13 @@ interrupted in one front end can be resumed from the other.
 | Started by | the MCP host (LM Studio, Claude Code), once per session |
 | Writes to | `/reports` (mount it) |
 
-> 📖 Full reference: [docs/15-mcp-server-documentation.md](../../docs/15-mcp-server-documentation.md)
-> · Driving it from LM Studio: [docs/16-gemma-user-guide.md](../../docs/16-gemma-user-guide.md)
+> 📖 Full reference: [docs/15-mcp-server-documentation.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/15-mcp-server-documentation.md)
+> · Driving it from LM Studio: [docs/16-gemma-user-guide.md](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/16-gemma-user-guide.md)
 > · Paste-ready prompts: [PROMPTS.md](PROMPTS.md)
 
 > ⚙ This is the **LLM-only** version. The earlier Semgrep-hybrid variant was
 > split out — deterministic scanning belongs to the platform's scanner
-> component per the [adaptation plan](../../docs/14-mcp-adaptation-plan.md). The
+> component per the [adaptation plan](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/14-mcp-adaptation-plan.md). The
 > hybrid implementation is preserved under the git tag `semgrep-hybrid`.
 > Scanner **output** is still welcome here: see *Deterministic findings* below.
 
@@ -49,7 +49,7 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway `
 
 Register it with an MCP host — see [`../.mcp.json`](../.mcp.json) for both a
 venv entry and a Docker entry, and
-[docs/16](../../docs/16-gemma-user-guide.md) for LM Studio step by step.
+[docs/16](https://github.com/hadsahar/DevSecOps-Final-Project/blob/main/docs/16-gemma-user-guide.md) for LM Studio step by step.
 
 Portability notes:
 - The image is self-contained (Python + git + server, ~410 MB). Move it to
@@ -79,7 +79,7 @@ prior `docker login`; the script refuses `--push` without a registry.
 
 This image is not a Kubernetes service: an MCP server speaks stdio and is
 started per session by its host. What runs in a cluster is
-[review-api](../backend), which embeds this component's pipeline.
+[review-api](..), which embeds this component's pipeline.
 
 ## Architecture
 
