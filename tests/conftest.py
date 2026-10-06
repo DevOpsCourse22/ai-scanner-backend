@@ -7,8 +7,8 @@ owns the pipeline — `mcp-server/tests/fixtures/dummy_repo` — rather than fro
 a second copy maintained here, because two copies drift.
 
 The fixture is test material, so it is deliberately not shipped inside the
-installed `code_review_mcp` package; the two components sit side by side in
-this repository, so the import path is resolved from the repository layout.
+installed `code_review_mcp` package; mcp-server/ is a folder of this
+repository (next to tests/), so the import path is resolved from that layout.
 """
 
 from __future__ import annotations
@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-_MCP_TESTS = Path(__file__).resolve().parents[2] / "mcp-server" / "tests"
+_MCP_TESTS = Path(__file__).resolve().parents[1] / "mcp-server" / "tests"
 
 if not (_MCP_TESTS / "test_dummy_repo.py").is_file():  # pragma: no cover
     raise RuntimeError(
         f"Expected the MCP server component's tests at {_MCP_TESTS}. The "
         "backend tests reuse its dummy-repo fixture. Run them from a full "
-        "checkout of the repository (mcp-server/ next to backend/)."
+        "checkout of the repository (mcp-server/ next to tests/)."
     )
 
 if str(_MCP_TESTS) not in sys.path:

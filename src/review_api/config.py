@@ -477,7 +477,7 @@ def load_dotenv(path: str | Path | None = None) -> Path | None:
     `GOOGLE_API_KEY=... python -m review_api.app` still overrides it.
     """
     candidates = [Path(path)] if path else [
-        Path(__file__).resolve().parents[3] / ".env",   # repository root
+        Path(__file__).resolve().parents[2] / ".env",   # repository root
         Path.cwd() / ".env",
     ]
     for candidate in candidates:

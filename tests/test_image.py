@@ -15,13 +15,20 @@ import pytest
 import yaml
 
 HERE = Path(__file__).resolve().parents[1]
-REPO = HERE.parent
+# This repository holds review-api (at its root) plus mcp-server/, scanner/
+# and scanner-worker/. docker-compose.yml stayed in the umbrella repository
+# (hadsahar/DevSecOps-Final-Project, Code-Review-MCP/), so the compose checks
+# below run only when that file is reachable as ../docker-compose.yml, i.e.
+# from a monorepo checkout.
+COMPOSE = HERE.parent / "docker-compose.yml"
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
 def api_service() -> dict:
-    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text(encoding="utf-8"))
+    if not COMPOSE.is_file():
+        pytest.skip("docker-compose.yml lives in the umbrella repository")
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     return compose["services"]["api"]
 
 
@@ -48,14 +55,14 @@ def test_the_healthcheck_needs_no_key_and_no_model():
 @pytest.mark.parametrize("name", ["mcp-server", "scanner"])
 def test_build_context_is_this_folder_plus_named_contexts(name):
     """The shared engine and the scanner tier each arrive via
-    --build-context <name>=../<name>, and forgetting either stops the build
+    --build-context <name>=./<name>, and forgetting either stops the build
     with a message, not a failed pull of an image by that name."""
     assert f"COPY --from={name}" in DOCKERFILE
     # The whole RUN instruction, continuation lines included.
     placeholder = re.search(rf"^FROM \S+ AS {re.escape(name)}\n(RUN .+?)\n\n",
                             DOCKERFILE, re.M | re.S)
     assert placeholder, f"the {name} fallback stage must come first"
-    assert f"--build-context {name}=../{name}" in placeholder.group(1)
+    assert f"--build-context {name}=./{name}" in placeholder.group(1)
     assert "exit 1" in placeholder.group(1)
 
 
@@ -97,9 +104,9 @@ def test_local_config_and_secrets_stay_out_of_the_image():
 
 @pytest.mark.parametrize("name", ["mcp-server", "scanner"])
 def test_build_script_passes_the_named_contexts(name):
-    assert f"--build-context {name}=../{name}" in \
+    assert f"--build-context {name}=./{name}" in \
         (HERE / "build.sh").read_text(encoding="utf-8")
-    assert f'"{name}=../{name}"' in \
+    assert f'"{name}=./{name}"' in \
         (HERE / "build.ps1").read_text(encoding="utf-8")
 
 
@@ -124,13 +131,13 @@ def test_build_script_refuses_to_push_without_a_registry():
 
 
 def test_every_service_has_its_own_build_script():
-    for folder, image in (("backend", "review-api"),
-                          ("frontend", "review-console"),
-                          ("mcp-server", "code-review-mcp")):
+    for folder, image in ((".", "review-api"),
+                          ("mcp-server", "code-review-mcp"),
+                          ("scanner-worker", "scanner-worker")):
         for script in ("build.sh", "build.ps1"):
-            text = (REPO / folder / script).read_text(encoding="utf-8")
+            text = (HERE / folder / script).read_text(encoding="utf-8")
             assert image in text, f"{folder}/{script} builds the wrong image"
-        assert b"\r" not in (REPO / folder / "build.sh").read_bytes()
+        assert b"\r" not in (HERE / folder / "build.sh").read_bytes()
 
 
 # ---------------- compose ----------------
