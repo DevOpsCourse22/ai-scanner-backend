@@ -23,7 +23,7 @@ import time
 from typing import Any, Callable
 
 import httpx
-from openai import APIConnectionError, APITimeoutError, OpenAI
+from openai import APIConnectionError, APITimeoutError, BadRequestError, OpenAI
 
 from .config import settings
 
@@ -118,6 +118,13 @@ class LLMUnavailableError(LLMError):
 # the report header when LMSTUDIO_MODEL is unset (LM Studio then routes to
 # whichever model is loaded).
 last_model_used: str | None = None
+
+# (endpoint, model) pairs that refused a sampling temperature during this
+# process. Newer hosted models (Anthropic's current Claude models among them)
+# answer 400 "`temperature` is deprecated for this model" to ANY value, so
+# once one refuses, later requests to it leave the parameter out instead of
+# paying a failed round trip per file.
+_no_temperature: set[tuple[str, str]] = set()
 
 
 def make_client() -> OpenAI:
@@ -253,13 +260,29 @@ def _stream_completion(
     "spent the whole budget thinking" instead of "returned no JSON".
     """
     global last_model_used
-    stream = client.chat.completions.create(
-        model=resolve_model(client),
-        messages=messages,
-        temperature=settings.temperature,
-        max_tokens=max_tokens,
-        stream=True,
-    )
+    model = resolve_model(client)
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    key = (settings.lm_base_url, model)
+    if settings.temperature is not None and key not in _no_temperature:
+        request["temperature"] = settings.temperature
+    try:
+        stream = client.chat.completions.create(**request)
+    except BadRequestError as exc:
+        # A model that does not take a temperature rejects the whole request,
+        # so without this every file of the review fails the same way. Drop
+        # it and ask again; any other 400 is a real error and propagates.
+        if "temperature" not in request or "temperature" not in str(exc).lower():
+            raise
+        logger.warning("%s refused a sampling temperature; sending requests "
+                       "to it without one", model or "the model")
+        _no_temperature.add(key)
+        del request["temperature"]
+        stream = client.chat.completions.create(**request)
     parts: list[str] = []
     reasoning_chars = 0
     chunks = 0

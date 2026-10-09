@@ -154,6 +154,12 @@ def classify_file(name: str, extensions: set[str],
     return None
 
 
+def _optional_float(raw: str) -> float | None:
+    """A float setting where empty or "none" means "do not send it"."""
+    raw = raw.strip()
+    return None if raw.lower() in ("", "none") else float(raw)
+
+
 @dataclass
 class Settings:
     """Runtime settings, sourced from environment variables."""
@@ -192,8 +198,10 @@ class Settings:
     run_scanner: bool = field(
         default_factory=lambda: os.getenv("REVIEW_RUN_SCANNER", "1") != "0"
     )
-    # Sampling temperature; low = deterministic, focused reviews.
-    temperature: float = field(default_factory=lambda: float(os.getenv("REVIEW_TEMPERATURE", "0.2")))
+    # Sampling temperature; low = deterministic, focused reviews. Empty or
+    # "none" leaves it out of the request, for models that refuse one.
+    temperature: float | None = field(default_factory=lambda: _optional_float(
+        os.getenv("REVIEW_TEMPERATURE", "0.2")))
     # Max tokens for each review response (deep mode).
     max_tokens: int = field(default_factory=lambda: int(os.getenv("REVIEW_MAX_TOKENS", "4096")))
     # Token CAP for the single brief-mode response. Generous because hidden

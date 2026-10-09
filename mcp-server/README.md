@@ -184,7 +184,7 @@ successful run deletes its `.partial.json`.
 | `REVIEW_MAX_CHUNK_CHARS` | `48000` | Per-request file content budget |
 | `REVIEW_MAX_FILE_BYTES` | `512000` | Skip files larger than this |
 | `REVIEW_MAX_FILES` | `500` | Cap on files per run |
-| `REVIEW_TEMPERATURE` | `0.2` | Sampling temperature |
+| `REVIEW_TEMPERATURE` | `0.2` | Sampling temperature; empty or `none` sends none. A model that refuses one (current Claude models) is retried without it automatically |
 | `REVIEW_MAX_TOKENS` | `4096` | Max tokens per deep-mode response |
 | `REVIEW_BRIEF_MAX_TOKENS` | `3000` | Token cap per brief response |
 | `REVIEW_BRIEF_PACK_CHARS` | `12000` | Char budget per digest batch |
