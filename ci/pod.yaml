@@ -1,0 +1,44 @@
+# The Pod each Jenkins build of this repository runs in (Kubernetes plugin).
+# One container per tool; Jenkins adds its own "jnlp" container, and every
+# container shares the build workspace, so a file one step writes (the image
+# tar) is visible to the next. The Pod is deleted when the build ends.
+apiVersion: v1                                    # core API group, where Pod is defined
+kind: Pod                                         # one build = one Pod
+spec:                                             # what runs in the Pod
+  containers:                                     # one container per tool the Jenkinsfile uses
+    - name: python                                # runs the test suites
+      image: python:3.12                          # full image (not -slim): the engine tests need git
+      command: ["sleep"]                          # keep the container alive ...
+      args: ["infinity"]                          # ... Jenkins runs the steps inside it with `container('python')`
+    - name: buildkit                              # builds the images from the Dockerfiles, without a Docker daemon
+      image: moby/buildkit:v0.34.0-rootless       # BuildKit (what `docker build` uses), rootless variant, pinned
+      command: ["sleep"]                          # keep the container alive ...
+      args: ["infinity"]                          # ... buildctl-daemonless.sh starts BuildKit for each step
+      env:                                        # settings for BuildKit
+        - name: BUILDKITD_FLAGS                   # extra flags for the BuildKit daemon
+          value: --oci-worker-no-process-sandbox  # needed when BuildKit runs rootless inside a Pod
+      securityContext:                            # rootless BuildKit needs user namespaces, which the defaults block
+        runAsUser: 1000                           # the image's own non-root user
+        runAsGroup: 1000                          # its group
+        seccompProfile:                           # the system-call filter ...
+          type: Unconfined                        # ... off for this container only (BuildKit's documented requirement)
+        appArmorProfile:                          # the AppArmor profile ...
+          type: Unconfined                        # ... off for this container only (same reason)
+      volumeMounts:                               # where BuildKit keeps its layer cache
+        - name: buildkit-cache                    # the emptyDir below
+          mountPath: /home/user/.local/share/buildkit  # BuildKit's state folder: the push step reuses the build step's layers
+    - name: trivy                                 # scans the built images for known vulnerabilities
+      image: aquasec/trivy:0.74.0                 # same Trivy version the review engine ships
+      command: ["sleep"]                          # keep the container alive ...
+      args: ["infinity"]                          # ... for `container('trivy')`
+    - name: aws                                   # only used when pushing to ECR (REGISTRY_KIND=ecr): gets the login token
+      image: amazon/aws-cli:2.27.0                # the official AWS CLI, pinned
+      command: ["sleep"]                          # keep the container alive (its default entrypoint is `aws`) ...
+      args: ["infinity"]                          # ... for `container('aws')`
+    - name: git                                   # commits the new image tag to the deployment repository
+      image: alpine/git:latest                    # git on Alpine
+      command: ["sleep"]                          # keep the container alive (its default entrypoint is `git`) ...
+      args: ["infinity"]                          # ... for `container('git')`
+  volumes:                                        # storage for the containers above
+    - name: buildkit-cache                        # BuildKit's layer cache for this one build
+      emptyDir: {}                                # deleted with the Pod
