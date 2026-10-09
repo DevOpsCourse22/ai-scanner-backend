@@ -628,6 +628,13 @@ class KubernetesJobStore:
         # by an EARLIER attempt is older than this start, so it can never
         # make a fresh attempt look stuck.
         attempt_started = _wall_clock()
+        # The latest progress write seen during this attempt. Kept across
+        # polls because the file does not stay: a worker that finishes
+        # deletes it, seconds before Kubernetes marks the Job succeeded.
+        # Measuring from attempt_started again in that gap made every
+        # review longer than the stale limit look stuck at 100% and get
+        # killed and rerun from the start (2026-10-09, gw-804074df13ff).
+        last_seen = attempt_started
         while True:
             time.sleep(POLL_INTERVAL_SECONDS)
             with self._lock:
@@ -684,10 +691,10 @@ class KubernetesJobStore:
                     error_report=read_error_file(self.cfg.output_dir,
                                                  job.review_id))
                 return
-            last = max(attempt_started,
-                       last_progress_at(self.cfg.output_dir, job.review_id)
-                       or 0.0)
-            idle = _wall_clock() - last
+            last_seen = max(last_seen,
+                            last_progress_at(self.cfg.output_dir,
+                                             job.review_id) or 0.0)
+            idle = _wall_clock() - last_seen
             if idle > STALE_PROGRESS_SECONDS:
                 # Deleting the Job SIGTERMs the worker, which keeps its
                 # checkpoint; the retry resumes from there and counts

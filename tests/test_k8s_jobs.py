@@ -541,6 +541,46 @@ def test_an_earlier_attempts_progress_file_cannot_make_a_new_one_stuck(
     assert job.status == "completed" and len(created) == 1
 
 
+def test_a_finished_worker_is_not_killed_before_its_job_succeeds(
+        monkeypatch, tmp_path):
+    """2026-10-09, gw-804074df13ff: a 50-minute deep review finished, the
+    worker deleted progress.json, and the next poll still saw the Job
+    running (Kubernetes marks it succeeded a few seconds later). With no
+    file, idle was counted from the attempt's start - 50 minutes - so the
+    finished Job was deleted as stuck and the review rerun from scratch."""
+    monkeypatch.setattr(k8s_jobs, "STALE_PROGRESS_SECONDS", 900)
+    now = _clock(monkeypatch)
+    progress = tmp_path / "abc.progress.json"
+
+    class Reviewing:
+        """Ten minutes later each poll, and the worker wrote just now."""
+        succeeded, failed = None, None
+
+        def __init__(self):
+            now["t"] += 600
+            _progress(tmp_path, now["t"] - 5)
+
+    class JustFinished:
+        """The worker is done and removed its file; the Job is not yet
+        marked succeeded."""
+        succeeded, failed = None, None
+
+        def __init__(self):
+            now["t"] += 5
+            progress.unlink(missing_ok=True)
+
+    (tmp_path / "abc.json").write_text("{}", encoding="utf-8")
+    created, deleted = [], []
+    _fake_cluster(monkeypatch, [])
+    monkeypatch.setattr(k8s_jobs, "_k8s_client", lambda: _batch_returning(
+        iter([Reviewing] * 5 + [JustFinished, JustFinished,
+                                SimpleNamespace(succeeded=1, failed=None)]),
+        created, deleted))
+    job = _create(KubernetesJobStore(_cfg(tmp_path)), "")
+    assert job.status == "completed"
+    assert len(created) == 1 and job.attempts == 1  # no retry, no rerun
+
+
 def test_the_deadline_is_only_a_high_backstop():
     manifest = _manifest()
     assert manifest["spec"]["activeDeadlineSeconds"] >= 12 * 3600
