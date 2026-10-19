@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import ADAPTERS, DEFAULT_SCANNERS
+from .symlinks import escaping_symlinks
 
 # Generous: a first Semgrep run downloads its rule packs, and Trivy
 # refreshes its vulnerability database.
@@ -122,6 +123,13 @@ def scan_repository(
             continue
         findings.extend(found)
         coverage[name] = cov
+
+    # Not one of the scanners: a check of the tree itself (symlinks.py).
+    # Kept out of `coverage` and `scanners_run`, which describe the tools.
+    try:
+        findings.extend(escaping_symlinks(target))
+    except OSError as exc:
+        failed["symlinks"] = f"symlink check failed: {exc}"
 
     # Most severe first, then by file, so a truncated list keeps what
     # matters rather than whatever happened to be scanned first.

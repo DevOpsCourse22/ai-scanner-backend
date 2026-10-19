@@ -421,6 +421,26 @@ def check_access(repo_url: str, branch: str | None = None,
         shutil.rmtree(tmp, onerror=_on_rm_error)
 
 
+def _symlink_reason(path: Path, root_real: Path) -> str:
+    """Why a link was not read, naming where it points.
+
+    The target is the repository's own text, not a secret, and it is the
+    part a reader needs: "skipped: symlink" alone would hide an attempt to
+    read /proc/self/environ behind the same words as a harmless README link.
+    """
+    try:
+        target = os.readlink(path)[:200]
+    except OSError:
+        # Not a link itself: a parent directory is one, and it leads out.
+        return "inside a symlinked directory that leads outside the repository; not read"
+    resolved = path.resolve()
+    if not resolved.exists():
+        return f"broken symlink (-> {target}); not read"
+    if resolved.is_relative_to(root_real):
+        return f"symlink to a path inside the repository (-> {target}); not read twice"
+    return f"symlink pointing outside the repository (-> {target}); not read"
+
+
 def collect_files(root: Path, extensions: set[str] | None = None) -> dict[str, Any]:
     """Walk the tree and build the files/skipped/excluded parts of the manifest.
 
@@ -436,11 +456,23 @@ def collect_files(root: Path, extensions: set[str] | None = None) -> dict[str, A
     excluded_by_type: Counter[str] = Counter()
     excluded_examples: list[str] = []
 
+    root_real = root.resolve()
     for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
         rel = path.relative_to(root)
         if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        # Before is_file(), which follows links - and so does read_text().
+        # A repository can ship `leak.py -> /proc/self/environ` or a link
+        # to another review's report on /reports, and both would be read
+        # here as if they were its own source. Nothing from the repository
+        # runs: OUR read follows the link, with this process's permissions.
+        # Links are recorded, never read; the scanner tier reports the ones
+        # that leave the repository as findings (repo_scanner.symlinks).
+        if path.is_symlink() or not path.resolve().is_relative_to(root_real):
+            skipped.append({"path": rel.as_posix(),
+                            "reason": _symlink_reason(path, root_real)})
+            continue
+        if not path.is_file():
             continue
         rel_str = rel.as_posix()
         language = classify_file(path.name, exts, by_name)
