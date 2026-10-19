@@ -27,8 +27,8 @@ from typing import Any, Callable
 from .config import settings
 from .findings import load_findings_file, match_to_manifest
 from .repo_ingest import IngestError, ingest_repository, validate_repo_url
-from .review import (_build_report, merge_retry, render_markdown,
-                     review_manifest)
+from .review import (_build_report, add_link_findings, merge_retry,
+                     render_markdown, review_manifest)
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +422,7 @@ def run_review(
         report["reused_reviews"] = len(preloaded)
     if findings_meta is not None:
         report["deterministic"] = findings_meta
+    report = add_link_findings(report, full_manifest)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False),

@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from . import llm
 from .config import settings
+from .findings import _normalize_one as _normalize_finding
 from .llm import (
     LINE_NUMBER_NOTE,
     LLMUnavailableError,
@@ -453,6 +454,24 @@ def render_markdown(report: dict[str, Any]) -> str:
             "Pass `extensions` to include them.",
             "",
         ]
+    links = report.get("symlinks") or []
+    escaping = [link for link in links if link.get("kind") == "escape"]
+    if escaping:
+        lines += [f"> 🟠 **{len(escaping)} symbolic link(s) lead outside the "
+                  "repository** and were not read:", ""]
+        lines += [f"> - `{link.get('path', '?')}` → `{link.get('target', '?')}`"
+                  for link in escaping[:10]]
+        if len(escaping) > 10:
+            lines.append(f"> - …and {len(escaping) - 10} more")
+        lines.append("")
+    internal = [link for link in links if link.get("kind") == "internal"]
+    if internal:
+        lines += [f"*{len(internal)} symbolic link(s) inside the repository "
+                  "were not read twice: "
+                  + ", ".join(f"`{link.get('path')}` is a link to "
+                              f"`{link.get('target')}`"
+                              for link in internal[:10])
+                  + (", …" if len(internal) > 10 else "") + ".*", ""]
     score = overall.get("score", stats.get("average_score"))
     if score is not None:
         lines += [f"## Verdict: {score}/10", ""]
@@ -766,7 +785,9 @@ def compute_stats(
     scores = [r["score"] for r in reviews if isinstance(r.get("score"), (int, float))]
 
     stats: dict[str, Any] = {
-        "files_reviewed": len(reviews),
+        # A link that leads out of the repository carries a finding but was
+        # never read, so it is not a reviewed file (add_link_findings).
+        "files_reviewed": sum(1 for r in reviews if not r.get("not_read")),
         "files_failed": len(failures),
         "files_skipped": skipped_count,
         "issues_total": sum(by_severity.values()),
@@ -829,6 +850,47 @@ def merge_retry(existing: dict[str, Any],
         "at": retry.get("generated_at"),
     }
     return merged
+
+
+def add_link_findings(report: dict[str, Any],
+                      manifest: dict[str, Any]) -> dict[str, Any]:
+    """Put what the walk learned about symbolic links into the report.
+
+    `symlinks` lists every link and where it leads. A link that leads OUT of
+    the repository also becomes an entry in `reviews` that holds one
+    deterministic finding and no model review (`not_read`: nothing was
+    read). That is where every report reader, the dashboard included,
+    already looks for findings; a separate key would be shown by nobody.
+    Called once, on the final report, so a resumed review does not add the
+    entries twice.
+    """
+    links = manifest.get("symlinks") or []
+    if not links:
+        return report
+    report["symlinks"] = links
+    present = {r.get("file") for r in report.get("reviews", [])}
+    for raw in manifest.get("security_findings") or []:
+        finding = _normalize_finding(raw, "ingest")
+        if finding is None or raw.get("file") in present:
+            continue
+        report.setdefault("reviews", []).append({
+            "file": raw["file"],
+            "score": None,
+            "summary": "Not read: a symbolic link that leads outside the "
+                       "repository.",
+            "issues": [],
+            "static_findings": [{**finding, "confirmed_by_llm": False}],
+            "not_read": True,
+        })
+    # Only the two counts the new entries change. The rest of the block may
+    # come from the model's summary (a brief pass recounts its issues) and
+    # must not be recomputed here.
+    reviews = report.get("reviews", [])
+    stats = report.setdefault("stats", {})
+    stats["files_reviewed"] = sum(1 for r in reviews if not r.get("not_read"))
+    stats["static_findings"] = sum(len(r.get("static_findings") or [])
+                                   for r in reviews)
+    return report
 
 
 def _build_report(

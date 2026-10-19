@@ -144,6 +144,25 @@ Run `check_repo_access(repo_url)` first: ~1s, and it explains *why* on
 failure — including GitHub's misleading "not found" for anonymous access to a
 private repo.
 
+## Symbolic links
+
+A repository is someone else's input, so a symbolic link in it is never
+followed or read. Without this, a link such as `leak.py -> /proc/self/environ`
+or `r.json -> /reports/<another review>.json` sent the reviewer's own
+environment (clone token included) or another user's report to the model.
+
+Every link is listed in the report's `symlinks` with where it leads:
+
+| `kind`     | Meaning | What the report does |
+|------------|---------|----------------------|
+| `internal` | The target is inside the repository | Lists it as "a link to X"; X is reviewed under its own name, not twice |
+| `escape`   | The target resolves outside the repository | Not read; a **high** finding `ingest` / `symlink-escapes-repository` (CWE-59) on the link's path |
+| `broken`   | The target does not exist (or the links loop) | Listed in `skipped` with the reason |
+
+The escape finding sits in `reviews` like any scanner finding (marked
+`not_read`, not counted as a reviewed file), so the dashboard shows it
+without changes.
+
 ## Deterministic findings intake
 
 The MCP runs no scanner, but it **accepts scanner output**.

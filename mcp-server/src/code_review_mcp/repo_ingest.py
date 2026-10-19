@@ -421,6 +421,96 @@ def check_access(repo_url: str, branch: str | None = None,
         shutil.rmtree(tmp, onerror=_on_rm_error)
 
 
+# A symbolic link that leads out of the clone is reported as a finding of
+# its own: a repository has no legitimate reason to point at the machine
+# that reviews it, and that is exactly how one would try to read the
+# reviewer's environment or another user's reports.
+SYMLINK_ESCAPE_RULE = "symlink-escapes-repository"
+SYMLINK_ESCAPE_SEVERITY = "high"
+
+# open() flag that refuses to open a symbolic link. Missing on Windows,
+# where git checks links out as plain files unless told otherwise.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def _walk_entries(root: Path) -> list[Path]:
+    """Every file and symbolic link under root, never following a link.
+
+    `Path.rglob` and `Path.is_file` follow symbolic links, so a link named
+    leak.py pointing at /proc/self/environ was read as if it were source.
+    os.walk with followlinks=False does not descend into a linked
+    directory; it lists the link itself, which the caller then classifies.
+    """
+    entries: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        here = Path(dirpath)
+        kept = []
+        for name in dirnames:
+            if name in SKIP_DIRS:
+                continue
+            if (here / name).is_symlink():
+                entries.append(here / name)      # a link to a directory
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+        entries.extend(here / name for name in filenames)
+    return sorted(entries)
+
+
+def _classify_link(path: Path, root: Path) -> dict[str, str]:
+    """Where a symbolic link leads: inside the clone, outside it, or nowhere.
+
+    Decided on the fully resolved target, so a chain of links, or one that
+    climbs out with ../../, is judged by where it really ends up.
+    """
+    # The link's own text, from the repository: capped, not trusted.
+    target = os.readlink(path)[:300]
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):          # missing target, or a loop
+        return {"kind": "broken", "target": target}
+    try:
+        inside = resolved.relative_to(root.resolve())
+    except ValueError:
+        return {"kind": "escape", "target": target}
+    return {"kind": "internal", "target": inside.as_posix()}
+
+
+def _read_regular(path: Path) -> str | None:
+    """A regular file's text, read without following a symbolic link.
+
+    None for anything that is not a regular file (a FIFO would block the
+    read forever, a device has no end). O_NOFOLLOW closes the gap between
+    checking a path and opening it, where it could be swapped for a link.
+    Raises UnicodeDecodeError like Path.read_text, and decodes the same way
+    (UTF-8, universal newlines), so line numbers do not move.
+    """
+    fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
+    with os.fdopen(fd, encoding="utf-8") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return handle.read()
+
+
+def symlink_finding(link: dict[str, str]) -> dict[str, Any]:
+    """The security finding for a link that leads out of the repository,
+    in the deterministic-findings shape (see findings.py)."""
+    return {
+        "file": link["path"],
+        "source": "ingest",
+        "rule": SYMLINK_ESCAPE_RULE,
+        "severity": SYMLINK_ESCAPE_SEVERITY,
+        "line": None,
+        "title": "Symbolic link points outside the repository",
+        "description": (
+            f"{link['path']} is a symbolic link to {link['target']}, outside "
+            "the repository, and was not read. A tool that follows such a "
+            "link reads the machine running it (its environment, other "
+            "users' files) instead of the repository's code."),
+        "cwe": "CWE-59",
+    }
+
+
 def collect_files(root: Path, extensions: set[str] | None = None) -> dict[str, Any]:
     """Walk the tree and build the files/skipped/excluded parts of the manifest.
 
@@ -428,35 +518,56 @@ def collect_files(root: Path, extensions: set[str] | None = None) -> dict[str, A
     than dropped in silence. Without that record a report says
     "files reviewed: 2, skipped: 0" for a repository of 57 files and reads
     like full coverage.
+
+    Symbolic links are never read. Each one is listed in `symlinks` with
+    where it leads: `internal` (its target is in the repository and is
+    reviewed under its own name, so reading the link would only review the
+    same code twice), `escape` (it leads outside the repository; also
+    returned as a finding in `security_findings`) or `broken` (also
+    recorded in `skipped`, with the reason).
     """
     exts = extensions or DEFAULT_EXTENSIONS
     by_name = extensions is None
     files: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    symlinks: list[dict[str, str]] = []
     excluded_by_type: Counter[str] = Counter()
     excluded_examples: list[str] = []
 
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
+    for path in _walk_entries(root):
         rel = path.relative_to(root)
         if any(part in SKIP_DIRS for part in rel.parts):
             continue
         rel_str = rel.as_posix()
+        if path.is_symlink():
+            link = {"path": rel_str, **_classify_link(path, root)}
+            symlinks.append(link)
+            if link["kind"] == "broken":
+                skipped.append({"path": rel_str, "reason":
+                                f"broken symbolic link (to {link['target']})"})
+            continue
+        if not stat.S_ISREG(path.lstat().st_mode):
+            continue                         # FIFO, socket, device
         language = classify_file(path.name, exts, by_name)
         if language is None:
             excluded_by_type[path.suffix.lower() or path.name.lower()] += 1
             if len(excluded_examples) < 25:
                 excluded_examples.append(rel_str)
             continue
-        size = path.stat().st_size
+        size = path.lstat().st_size
         if size > settings.max_file_bytes:
             skipped.append({"path": rel_str, "reason": f"too large ({size} bytes)"})
             continue
         try:
-            content = path.read_text(encoding="utf-8")
+            content = _read_regular(path)
         except UnicodeDecodeError:
             skipped.append({"path": rel_str, "reason": "not valid UTF-8 (binary?)"})
+            continue
+        except OSError as exc:               # e.g. swapped for a link mid-walk
+            skipped.append({"path": rel_str,
+                            "reason": f"could not be read ({exc.strerror})"})
+            continue
+        if content is None:
             continue
         # Minified bundles and notebook exports: hours of review time for
         # nothing a reader can act on. Recorded in `skipped`, never dropped
@@ -479,6 +590,9 @@ def collect_files(root: Path, extensions: set[str] | None = None) -> dict[str, A
     return {
         "files": files,
         "skipped": skipped,
+        "symlinks": symlinks,
+        "security_findings": [symlink_finding(link) for link in symlinks
+                              if link["kind"] == "escape"],
         "excluded": {
             "count": sum(excluded_by_type.values()),
             "by_type": dict(excluded_by_type.most_common()),
@@ -556,6 +670,8 @@ def ingest_repository(
         "files": collected["files"],
         "skipped": collected["skipped"],
         "excluded": excluded,
+        "symlinks": collected.get("symlinks", []),
+        "security_findings": collected.get("security_findings", []),
     }
 
 
