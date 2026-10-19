@@ -38,11 +38,12 @@ The full interface is [docs/job-container-contract.md](https://github.com/hadsah
 | `LMSTUDIO_BASE_URL` | yes | e.g. the Tailscale egress Service, `http://<svc>:1234/v1` |
 | `SYSTEM_PROMPT` | yes | The reviewer's system prompt |
 | `BRANCH` | no | Default: the repository's default branch |
-| `GITHUB_TOKEN` | no | From a Secret (`secretKeyRef`). Never a literal in the Job spec |
-| `GITHUB_TOKEN_FILE` | no | Alternative: path to a Secret mounted as a file |
+| `GITHUB_TOKEN_FILE` | no | Path to a file holding the clone token. **What review-api uses** (contract v5): the file is read, then deleted |
+| `GITHUB_TOKEN` | no | The same token as a variable, for a plain `docker run`. Never a literal in a Job spec |
 | `LMSTUDIO_MODEL` | no | Pin the model; empty = whatever LM Studio has loaded |
 | `COMMIT` | no | Full 40-character SHA; pins the clone to that commit (set by review-api on resume, contract v3) |
-| `LLM_API_KEY` | no | The AI service's API key from Settings, via the per-attempt Secret (contract v4); never logged, removed from the environment before scanners run |
+| `LLM_API_KEY_FILE` | no | Path to a file holding the AI service's API key from Settings (contract v5); read, then deleted |
+| `LLM_API_KEY` | no | The same key as a variable (contract v4); never logged, removed from the environment before scanners run |
 
 Every other `REVIEW_*` tuning variable of the engine (see
 `mcp-server/src/code_review_mcp/config.py`) works too, for example
@@ -97,6 +98,16 @@ uses in process; a test fails if the two drift apart.
 
 ## The token
 
+- review-api hands it over as a **file**, not a variable. Its Job copies the
+  per-attempt Secret into an in-memory `emptyDir`
+  (`/run/review-credentials`, init container `copy-credentials`), points
+  `GITHUB_TOKEN_FILE` / `LLM_API_KEY_FILE` at it, and the worker deletes each
+  file as soon as it has read it. A variable could not be made safe: removing
+  it from `os.environ` leaves it in `/proc/<pid>/environ`, which keeps the
+  environment the process started with and which anything running as the
+  same user (a scanner, code in the reviewed repository) can read. The main
+  container never mounts the Secret itself, and review-api deletes the
+  Secret after every attempt.
 - The worker takes it **out of the environment** before the engine is
   imported. Semgrep, Trivy and Gitleaks are child processes and inherit the
   environment, so they never see it.

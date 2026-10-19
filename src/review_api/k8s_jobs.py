@@ -224,6 +224,10 @@ SWEEP_SECONDS = float(os.getenv("REVIEW_K8S_SWEEP_SECONDS", "30"))
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
+# Where the worker finds the clone token and the AI service key as files
+# (contract v5): an in-memory emptyDir, so the worker can delete them.
+CREDENTIALS_DIR = "/run/review-credentials"
+
 
 def job_subpath(review_id: str) -> str:
     """The Job's folder on the PVC, as the volumeMount `subPath`."""
@@ -423,8 +427,13 @@ def build_job_manifest(
     * `emptyDir` for the clone workspace, sized and separate from the PVC
       — the PVC is for reports and checkpoints ONLY (2026-09-19 decision);
       source code must never land on it.
-    * `GITHUB_TOKEN` (when present) arrives via `secretKeyRef`, never as a
-      literal env value baked into this manifest.
+    * The clone token and the AI service key (when present) arrive as FILES
+      (`GITHUB_TOKEN_FILE`, `LLM_API_KEY_FILE`, contract v5), never as env
+      values: an init container copies them from the per-attempt Secret
+      into an in-memory emptyDir, and the worker deletes each file once it
+      has read it. An env var stays readable in /proc/<pid>/environ for the
+      whole run, even after the worker removes it from os.environ. The main
+      container never mounts the Secret itself.
     * The PVC is mounted with `subPath: .jobs/<review_id>`: the worker sees
       its own folder as `/reports` and nothing else on the volume.
     """
@@ -447,19 +456,88 @@ def build_job_manifest(
         # it start over.
         env.append({"name": "COMMIT", "value": commit})
     if secret_name and secret_has_token:
-        env.append({
-            "name": "GITHUB_TOKEN",
-            "valueFrom": {"secretKeyRef": {"name": secret_name,
-                                           "key": "token"}},
-        })
+        env.append({"name": "GITHUB_TOKEN_FILE",
+                    "value": f"{CREDENTIALS_DIR}/token"})
     if secret_name and secret_has_llm_key:
         # Contract v4: the AI service's API key (Settings, AI model), from
-        # the same per-attempt Secret, never as a literal value here.
-        env.append({
-            "name": "LLM_API_KEY",
-            "valueFrom": {"secretKeyRef": {"name": secret_name,
-                                           "key": "llm_api_key"}},
+        # the same per-attempt Secret. A file since v5, like the token.
+        env.append({"name": "LLM_API_KEY_FILE",
+                    "value": f"{CREDENTIALS_DIR}/llm_api_key"})
+    container_security = {
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "capabilities": {"drop": ["ALL"]},
+    }
+    mounts = [
+        {"name": "reports", "mountPath": "/reports",
+         "subPath": job_subpath(review_id)},
+        {"name": "workspace", "mountPath": "/workspace"},
+        {"name": "tmp", "mountPath": "/tmp"},
+    ]
+    volumes = [
+        {"name": "reports",
+         "persistentVolumeClaim": {"claimName": pvc_name}},
+        # Clone workspace: ephemeral, Job-local, sized —
+        # never the PVC. Gone the moment the Pod is.
+        {"name": "workspace",
+         "emptyDir": {"sizeLimit": "2Gi"}},
+        {"name": "tmp", "emptyDir": {"sizeLimit": "512Mi"}},
+    ]
+    init_containers = []
+    if secret_name and (secret_has_token or secret_has_llm_key):
+        mounts.append({"name": "credentials", "mountPath": CREDENTIALS_DIR})
+        volumes += [
+            # Only the init container mounts the Secret.
+            {"name": "secret", "secret": {"secretName": secret_name}},
+            # RAM, not disk: the copy is never written to the node's disk,
+            # and is gone with the Pod even if the worker could not delete it.
+            {"name": "credentials",
+             "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"}},
+        ]
+        init_containers.append({
+            "name": "copy-credentials",
+            "image": image,
+            # A Secret volume is read-only, so the worker could not delete
+            # its files there. Copied (cp follows the Secret volume's own
+            # links to the real files) to where it can.
+            "command": ["sh", "-c",
+                        f"cp /run/review-secret/* {CREDENTIALS_DIR}/ && "
+                        f"chmod 600 {CREDENTIALS_DIR}/*"],
+            "securityContext": container_security,
+            "resources": {
+                "requests": {"cpu": "10m", "memory": "16Mi"},
+                "limits": {"cpu": "100m", "memory": "64Mi"},
+            },
+            "volumeMounts": [
+                {"name": "secret", "mountPath": "/run/review-secret",
+                 "readOnly": True},
+                {"name": "credentials", "mountPath": CREDENTIALS_DIR},
+            ],
         })
+
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "securityContext": {
+            "runAsNonRoot": True,
+            "runAsUser": 10001,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "containers": [{
+            "name": "scanner-worker",
+            "image": image,
+            "env": env,
+            "securityContext": container_security,
+            "resources": {
+                "requests": {"cpu": "500m", "memory": "1Gi"},
+                "limits": {"cpu": "2", "memory": "4Gi"},
+            },
+            "volumeMounts": mounts,
+        }],
+        "volumes": volumes,
+    }
+    if init_containers:
+        pod_spec["initContainers"] = init_containers
 
     return {
         "apiVersion": "batch/v1",
@@ -486,44 +564,7 @@ def build_job_manifest(
                     "labels": {
                         "ai-scan.io/review-id": review_label_for(review_id)},
                 },
-                "spec": {
-                    "restartPolicy": "Never",
-                    "automountServiceAccountToken": False,
-                    "securityContext": {
-                        "runAsNonRoot": True,
-                        "runAsUser": 10001,
-                        "seccompProfile": {"type": "RuntimeDefault"},
-                    },
-                    "containers": [{
-                        "name": "scanner-worker",
-                        "image": image,
-                        "env": env,
-                        "securityContext": {
-                            "allowPrivilegeEscalation": False,
-                            "readOnlyRootFilesystem": True,
-                            "capabilities": {"drop": ["ALL"]},
-                        },
-                        "resources": {
-                            "requests": {"cpu": "500m", "memory": "1Gi"},
-                            "limits": {"cpu": "2", "memory": "4Gi"},
-                        },
-                        "volumeMounts": [
-                            {"name": "reports", "mountPath": "/reports",
-                             "subPath": job_subpath(review_id)},
-                            {"name": "workspace", "mountPath": "/workspace"},
-                            {"name": "tmp", "mountPath": "/tmp"},
-                        ],
-                    }],
-                    "volumes": [
-                        {"name": "reports",
-                         "persistentVolumeClaim": {"claimName": pvc_name}},
-                        # Clone workspace: ephemeral, Job-local, sized —
-                        # never the PVC. Gone the moment the Pod is.
-                        {"name": "workspace",
-                         "emptyDir": {"sizeLimit": "2Gi"}},
-                        {"name": "tmp", "emptyDir": {"sizeLimit": "512Mi"}},
-                    ],
-                },
+                "spec": pod_spec,
             },
         },
     }

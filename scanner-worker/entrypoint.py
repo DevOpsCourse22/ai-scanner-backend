@@ -334,28 +334,54 @@ def take_token(env: dict[str, str]) -> str:
     environment. Taking it out here means the only copy is the one this
     function returns, which goes to run_review() and nowhere else.
 
-    GITHUB_TOKEN_FILE supports a Secret mounted as a file (the contract
-    allows either form). GH_TOKEN is dropped too, for the same reason.
+    GITHUB_TOKEN_FILE is the form review-api uses (contract v5): removing a
+    variable from os.environ does NOT remove it from /proc/self/environ,
+    which keeps the environment the process started with and which anything
+    running as this user can read. A file read and then deleted leaves no
+    copy behind. GITHUB_TOKEN still works for a plain `docker run`.
+    GH_TOKEN is dropped too, for the same reason.
     """
     token = (env.pop("GITHUB_TOKEN", "") or "").strip()
     env.pop("GH_TOKEN", None)
-    token_file = env.pop("GITHUB_TOKEN_FILE", "")
-    if not token and token_file:
-        try:
-            token = Path(token_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            # Names the file, never its content.
-            raise InputError(f"GITHUB_TOKEN_FILE is set but unreadable: "
-                             f"{token_file} ({exc.strerror})") from None
-    return token
+    from_file = _take_secret_file(env, "GITHUB_TOKEN_FILE")
+    return token or from_file
 
 
 def take_llm_key(env: dict[str, str]) -> str:
     """Read the AI service's API key (contract v4) and REMOVE it from `env`,
     for the same reason as the clone token: no scanner child process may
-    inherit it. LMSTUDIO_API_KEY is left alone; it is the server default the
-    engine falls back to when Settings chose no key."""
-    return (env.pop("LLM_API_KEY", "") or "").strip()
+    inherit it. LLM_API_KEY_FILE is the file form, read and deleted like
+    GITHUB_TOKEN_FILE. LMSTUDIO_API_KEY is left alone; it is the server
+    default the engine falls back to when Settings chose no key."""
+    key = (env.pop("LLM_API_KEY", "") or "").strip()
+    from_file = _take_secret_file(env, "LLM_API_KEY_FILE")
+    return key or from_file
+
+
+def _take_secret_file(env: dict[str, str], name: str) -> str:
+    """The secret in the file `env[name]` names; the variable is removed and
+    the file deleted once read, so nothing started after this (Semgrep,
+    Trivy, Gitleaks, anything in the repository they run) can read it.
+
+    The file lives on an in-memory emptyDir the Job copies the Secret into
+    (k8s_jobs.build_job_manifest). A file that cannot be deleted - a Secret
+    mounted read-only, say - is still used, with a warning.
+    """
+    path = env.pop(name, "")
+    if not path:
+        return ""
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        # Names the file, never its content.
+        raise InputError(f"{name} is set but unreadable: "
+                         f"{path} ({exc.strerror})") from None
+    try:
+        Path(path).unlink()
+    except OSError as exc:
+        log.warning("%s could not be deleted after reading: %s (%s)",
+                    name, path, exc.strerror)
+    return value
 
 
 def read_inputs(env: dict[str, str], token: str) -> Inputs:

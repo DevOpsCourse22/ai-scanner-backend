@@ -50,20 +50,42 @@ def test_branch_included_when_given():
     assert env["BRANCH"]["value"] == "develop"
 
 
-def test_github_token_uses_secret_ref_never_a_literal():
+def test_github_token_arrives_as_a_file_never_an_env_value():
+    """Contract v5: an env var stays in /proc/<pid>/environ for the whole
+    run, whatever the worker does to os.environ. A file can be deleted."""
     manifest = _manifest(secret_name="review-token-abc-1")
     env = _env(manifest)
-    assert "GITHUB_TOKEN" in env
-    ref = env["GITHUB_TOKEN"]["valueFrom"]["secretKeyRef"]
-    assert ref == {"name": "review-token-abc-1", "key": "token"}
-    # The literal value must never appear anywhere in the manifest.
+    assert "GITHUB_TOKEN" not in env
+    assert env["GITHUB_TOKEN_FILE"] == {
+        "name": "GITHUB_TOKEN_FILE",
+        "value": "/run/review-credentials/token"}
+    # No secretKeyRef anywhere, and never the literal value.
     import json
+    assert "secretKeyRef" not in json.dumps(manifest)
     assert "ghp_" not in json.dumps(manifest)
 
 
-def test_no_secret_ref_when_no_token_supplied():
-    env = _env(_manifest())
-    assert "GITHUB_TOKEN" not in env
+def test_only_the_init_container_mounts_the_secret():
+    pod = _manifest(secret_name="review-token-abc-1")["spec"]["template"][
+        "spec"]
+    volumes = {v["name"]: v for v in pod["volumes"]}
+    assert volumes["secret"]["secret"] == {"secretName": "review-token-abc-1"}
+    assert volumes["credentials"]["emptyDir"]["medium"] == "Memory"
+    (init,) = pod["initContainers"]
+    assert {m["name"] for m in init["volumeMounts"]} == {"secret",
+                                                         "credentials"}
+    assert init["securityContext"] == pod["containers"][0]["securityContext"]
+    main_mounts = {m["name"]: m for m in pod["containers"][0]["volumeMounts"]}
+    assert "secret" not in main_mounts           # the worker never sees it
+    assert main_mounts["credentials"]["mountPath"] == "/run/review-credentials"
+
+
+def test_no_credentials_volume_when_no_token_supplied():
+    pod = _manifest()["spec"]["template"]["spec"]
+    assert "GITHUB_TOKEN_FILE" not in _env(_manifest())
+    assert "initContainers" not in pod
+    assert {v["name"] for v in pod["volumes"]} == {"reports", "workspace",
+                                                   "tmp"}
 
 
 def test_backoff_limit_zero_k8s_never_retries_a_job_itself():
@@ -731,13 +753,12 @@ def test_a_resume_pins_the_commit_on_the_new_job(monkeypatch, tmp_path):
 
 # ---------------- the AI service key from Settings (contract v4) ----------
 
-def test_llm_key_comes_from_the_secret_never_a_literal():
+def test_llm_key_comes_from_the_secret_as_a_file_never_a_literal():
     env = _env(_manifest(secret_name="s", secret_has_token=False,
                          secret_has_llm_key=True))
-    assert "GITHUB_TOKEN" not in env
-    ref = env["LLM_API_KEY"]["valueFrom"]["secretKeyRef"]
-    assert ref == {"name": "s", "key": "llm_api_key"}
-    assert "value" not in env["LLM_API_KEY"]
+    assert "GITHUB_TOKEN_FILE" not in env and "LLM_API_KEY" not in env
+    assert env["LLM_API_KEY_FILE"]["value"] == (
+        "/run/review-credentials/llm_api_key")
 
 
 def test_a_review_with_an_llm_key_gets_a_secret_holding_only_that(
@@ -765,7 +786,7 @@ def test_a_review_with_an_llm_key_gets_a_secret_holding_only_that(
     env = {e["name"]: e for e in
            created[0]["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["LMSTUDIO_BASE_URL"]["value"] == "https://api.openai.com/v1"
-    assert "LLM_API_KEY" in env and "GITHUB_TOKEN" not in env
+    assert "LLM_API_KEY_FILE" in env and "GITHUB_TOKEN_FILE" not in env
     assert "sk-secret-123" not in json.dumps(created[0])
     job = store.get("k1")
     assert job.public()["ai_service"] == "openai"

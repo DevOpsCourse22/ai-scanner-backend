@@ -41,7 +41,7 @@ def job_env(monkeypatch, tmp_path):
         "TERMINATION_LOG": str(tmp_path / "termination-log"),
     }
     for name in ("BRANCH", "GH_TOKEN", "GITHUB_TOKEN_FILE", "COMMIT",
-                 "LLM_API_KEY"):
+                 "LLM_API_KEY", "LLM_API_KEY_FILE"):
         monkeypatch.delenv(name, raising=False)
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -158,6 +158,46 @@ def test_token_can_come_from_a_mounted_secret_file(monkeypatch, job_env,
     assert calls[0]["github_token"] == TOKEN
 
 
+def test_the_token_file_is_deleted_once_read(monkeypatch, job_env,
+                                            output_dir):
+    """Contract v5. Nothing started after the read - a scanner, or code in
+    the repository it runs - may find the token on disk."""
+    secret = job_env / "token"
+    secret.write_text(TOKEN, encoding="utf-8")
+    monkeypatch.delenv("GITHUB_TOKEN")
+    monkeypatch.setenv("GITHUB_TOKEN_FILE", str(secret))
+    seen = {}
+
+    def run(*args, **kwargs):
+        seen["file_exists"] = secret.exists()
+        seen["env"] = os.environ.get("GITHUB_TOKEN_FILE")
+        return fake_run_review([])(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "run_review", run)
+    assert entrypoint.main() == 0
+    assert seen == {"file_exists": False, "env": None}
+
+
+def test_a_token_file_that_cannot_be_deleted_is_still_used(monkeypatch,
+                                                           job_env, caplog):
+    secret = job_env / "token"
+    secret.write_text(TOKEN, encoding="utf-8")
+    env = {"GITHUB_TOKEN_FILE": str(secret)}
+    monkeypatch.setattr(entrypoint.Path, "unlink",
+                        lambda self, *a, **k: (_ for _ in ()).throw(
+                            PermissionError(13, "Read-only file system")))
+    with caplog.at_level(logging.WARNING):
+        assert entrypoint.take_token(env) == TOKEN
+    assert "could not be deleted" in caplog.text
+    assert TOKEN not in caplog.text
+
+
+def test_an_unreadable_token_file_is_a_permanent_failure(job_env):
+    env = {"GITHUB_TOKEN_FILE": str(job_env / "missing")}
+    with pytest.raises(entrypoint.InputError, match="GITHUB_TOKEN_FILE"):
+        entrypoint.take_token(env)
+
+
 def test_no_token_is_a_public_clone(monkeypatch, job_env, output_dir):
     monkeypatch.delenv("GITHUB_TOKEN")
     calls = []
@@ -200,6 +240,25 @@ def test_the_llm_key_reaches_the_engine_and_leaves_the_environment(
     monkeypatch.setattr(pipeline, "run_review", run)
     assert entrypoint.main() == 0
     assert seen == {"key": LLM_KEY, "env": None}   # scanners can't inherit it
+
+
+def test_the_llm_key_can_come_from_a_file_that_is_then_deleted(
+        monkeypatch, job_env, output_dir):
+    from code_review_mcp.config import settings as engine_settings
+    key_file = job_env / "llm_api_key"
+    key_file.write_text(LLM_KEY + "\n", encoding="utf-8")
+    monkeypatch.setenv("LLM_API_KEY_FILE", str(key_file))
+    monkeypatch.setattr(engine_settings, "lm_api_key", "lm-studio")
+    seen = {}
+
+    def run(*args, **kwargs):
+        seen["key"] = engine_settings.lm_api_key
+        seen["file_exists"] = key_file.exists()
+        return fake_run_review([])(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "run_review", run)
+    assert entrypoint.main() == 0
+    assert seen == {"key": LLM_KEY, "file_exists": False}
 
 
 def test_without_an_llm_key_the_server_default_stays(monkeypatch, job_env,
