@@ -301,6 +301,15 @@ def _cfg(tmp_path):
             base_url="http://lmstudio:1234/v1"))
 
 
+def _worker(tmp_path, review_id="abc"):
+    """Where the worker's /reports really is: its own folder on the PVC.
+    Files a test writes here are what the worker wrote; review-api only
+    sees them once a poll has copied them out."""
+    folder = k8s_jobs.job_dir(tmp_path, review_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 class _ApiError(Exception):
     def __init__(self, status):
         super().__init__(f"({status})")
@@ -425,7 +434,7 @@ def _clock(monkeypatch, start=10_000.0):
 
 
 def _progress(tmp_path, updated_at, review_id="abc"):
-    (tmp_path / f"{review_id}.progress.json").write_text(
+    (_worker(tmp_path, review_id) / f"{review_id}.progress.json").write_text(
         json.dumps({"current_file": "", "current_started_at": None,
                     "durations": [], "updated_at": updated_at}), "utf-8")
 
@@ -550,7 +559,7 @@ def test_a_finished_worker_is_not_killed_before_its_job_succeeds(
     finished Job was deleted as stuck and the review rerun from scratch."""
     monkeypatch.setattr(k8s_jobs, "STALE_PROGRESS_SECONDS", 900)
     now = _clock(monkeypatch)
-    progress = tmp_path / "abc.progress.json"
+    progress = _worker(tmp_path) / "abc.progress.json"
 
     class Reviewing:
         """Ten minutes later each poll, and the worker wrote just now."""
@@ -656,7 +665,7 @@ def test_progress_json_drives_the_status_in_kubernetes_mode(monkeypatch,
 
         def __init__(self):
             now["t"] += 5
-            (tmp_path / "abc.progress.json").write_text(json.dumps({
+            (_worker(tmp_path) / "abc.progress.json").write_text(json.dumps({
                 "phase": "reviewing", "done": 4, "total": 10, "reused": 7,
                 "commit": "c" * 40, "eta_seconds": 120,
                 "updated_at": now["t"]}), "utf-8")
@@ -685,7 +694,7 @@ def test_progress_json_drives_the_status_in_kubernetes_mode(monkeypatch,
 def test_an_old_attempts_progress_is_not_shown_as_this_ones(monkeypatch,
                                                             tmp_path):
     now = _clock(monkeypatch)
-    (tmp_path / "abc.progress.json").write_text(json.dumps({
+    (_worker(tmp_path) / "abc.progress.json").write_text(json.dumps({
         "phase": "reviewing", "done": 9, "total": 10,
         "updated_at": now["t"] - 3600}), "utf-8")
 

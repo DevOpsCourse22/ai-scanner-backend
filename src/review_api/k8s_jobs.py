@@ -34,10 +34,16 @@ constants below once the real image and PVC exist):
 * A container image implementing `docs/job-container-contract.md` is
   available at `SCANNER_WORKER_IMAGE`.
 * A PVC named `PVC_NAME` already exists in `namespace`, and `review-api`'s
-  own Pod mounts THE SAME PVC at `settings.output_dir` — so once a Job
-  finishes, its report is already sitting where `review-api` already looks
-  for reports (see `app.py`'s `/api/v1/reports` routes). No separate
-  "fetch the result" step is needed; only "has it finished" is.
+  own Pod mounts THE SAME PVC at `settings.output_dir`.
+
+EACH JOB SEES ONLY ITS OWN FOLDER of that PVC: `.jobs/<review_id>/`,
+mounted at `/reports` with `subPath`. The Job runs someone else's
+repository, so it must not be able to read or overwrite another user's
+report. review-api copies what the worker writes there to the flat
+`<review_id>.*` files every route already reads (`sync_job_dir`, on every
+poll), and copies a resume's checkpoint in before each attempt
+(`prepare_job_dir`). The worker's side of the contract is unchanged: it
+still writes `/reports/<REVIEW_ID>.*`.
 """
 
 from __future__ import annotations
@@ -47,6 +53,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
 import threading
 import time
 import uuid
@@ -181,6 +189,166 @@ def last_progress_at(output_dir: str, review_id: str) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
+# ---- each Job sees only its own folder of the reports PVC ----
+#
+# The folder is `<output_dir>/.jobs/<review_id>/` (hidden, so no report
+# listing ever picks it up). review-api creates it, as the same uid the
+# worker runs as, before the Job exists: a subPath that Kubernetes has to
+# create itself is made by the kubelet, not as that uid, and the worker
+# might not be able to write to it.
+JOBS_SUBDIR = ".jobs"
+
+# Copied from the flat directory into the folder before each attempt: what
+# the worker reads back to resume (the checkpoint, the reusable scan, the
+# plan it otherwise rewrites).
+_SEEDED = (".partial.json", ".findings.json", ".plan.json")
+# Copied back to the flat directory whenever they change. Never deleted
+# there: the previous run's report stays readable until this run replaces it.
+_COPIED = (".json", ".md", ".findings.json", ".plan.json")
+# Files the worker removes as part of the contract (the checkpoint once the
+# report exists, progress when it finishes, a stale error when it starts):
+# the flat copy follows, so a removal means the same thing it always did.
+_MIRRORED = (".partial.json", ".progress.json", ".error.json")
+# Never carried into a new attempt: they describe the attempt that wrote them.
+_PER_ATTEMPT = (".progress.json", ".error.json")
+
+# Nothing the worker writes is near this; a bigger file is refused, not
+# copied, so a hostile Job cannot fill review-api's disk through the sync.
+MAX_SYNC_BYTES = 64 * 1024 * 1024
+
+# How often the sweeper syncs folders of Jobs no poller watches (review-api
+# restarted while they ran, or a paused review's worker writing its last
+# checkpoint), and removes a folder nothing has written to for
+# STALE_PROGRESS_SECONDS.
+SWEEP_SECONDS = float(os.getenv("REVIEW_K8S_SWEEP_SECONDS", "30"))
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def job_subpath(review_id: str) -> str:
+    """The Job's folder on the PVC, as the volumeMount `subPath`."""
+    return f"{JOBS_SUBDIR}/{review_id}"
+
+
+def job_dir(output_dir: str | Path, review_id: str) -> Path:
+    return Path(output_dir) / JOBS_SUBDIR / review_id
+
+
+def _read_regular(path: Path) -> bytes | None:
+    """A regular file's bytes, or None. Never follows a symbolic link.
+
+    The worker runs a stranger's repository and may be compromised, so what
+    it leaves in its folder is untrusted: a link planted there
+    (`<id>.md -> /proc/self/environ`) must not make review-api copy its OWN
+    environment into a report it then serves.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:                   # ELOOP: it is a link
+        logger.warning("not copying %s: %s", path.name, exc.strerror)
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SYNC_BYTES:
+            logger.warning("not copying %s: not a regular file under %d "
+                           "bytes", path.name, MAX_SYNC_BYTES)
+            return None
+        return handle.read(MAX_SYNC_BYTES)
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Replace path in one step: a reader sees the old file or the new one,
+    never half of it (the sweeper and a poller may copy at the same time)."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}."
+                         f"{threading.get_ident()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+def sync_job_dir(output_dir: str | Path, review_id: str,
+                 seen: dict[str, tuple[int, int]] | None = None) -> None:
+    """Copy what the worker wrote in its folder to the flat directory.
+
+    `seen` remembers each file's (size, mtime) from the last copy, so an
+    unchanged checkpoint is not copied again on every poll. Errors are
+    logged, not raised: one failed copy is retried on the next poll, and
+    must never fail the review.
+    """
+    src, dst = job_dir(output_dir, review_id), Path(output_dir)
+    if src.is_symlink() or not src.is_dir():
+        return
+    for suffix in dict.fromkeys(_COPIED + _MIRRORED):
+        name = f"{review_id}{suffix}"
+        try:
+            info = os.lstat(src / name)
+        except FileNotFoundError:
+            if suffix in _MIRRORED:
+                try:
+                    (dst / name).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("could not remove %s", name, exc_info=True)
+            if seen is not None:
+                seen.pop(name, None)
+            continue
+        except OSError:
+            logger.warning("could not stat %s", name, exc_info=True)
+            continue
+        signature = (info.st_size, info.st_mtime_ns)
+        if (seen is not None and seen.get(name) == signature
+                and (dst / name).exists()):
+            continue
+        data = _read_regular(src / name)
+        if data is None:
+            continue
+        try:
+            _write_atomic(dst / name, data)
+        except OSError:
+            logger.warning("could not copy %s", name, exc_info=True)
+            continue
+        if seen is not None:
+            seen[name] = signature
+
+
+def prepare_job_dir(output_dir: str | Path, review_id: str) -> Path:
+    """Create the Job's folder and put in it what this attempt resumes from.
+
+    A folder left by an earlier attempt is synced out first: it may hold a
+    checkpoint newer than the flat copy (written after the last poll, or
+    while review-api was restarting). Raises OSError when the folder cannot
+    be created; the caller reports that as a failed review.
+    """
+    folder = job_dir(output_dir, review_id)
+    if folder.is_dir():
+        sync_job_dir(output_dir, review_id)
+    (Path(output_dir) / JOBS_SUBDIR).mkdir(mode=0o700, exist_ok=True)
+    folder.mkdir(mode=0o700, exist_ok=True)
+    for suffix in _PER_ATTEMPT:
+        (folder / f"{review_id}{suffix}").unlink(missing_ok=True)
+    for suffix in _SEEDED:
+        data = _read_regular(Path(output_dir) / f"{review_id}{suffix}")
+        if data is not None:
+            _write_atomic(folder / f"{review_id}{suffix}", data)
+    return folder
+
+
+def remove_job_dir(output_dir: str | Path, review_id: str) -> None:
+    """Delete the Job's folder once everything in it has been copied out."""
+    shutil.rmtree(job_dir(output_dir, review_id), ignore_errors=True)
+
+
+def _newest_write(folder: Path) -> float:
+    """When anything in the folder was last written (epoch seconds)."""
+    times = [folder.lstat().st_mtime]
+    for entry in folder.iterdir():
+        try:
+            times.append(entry.lstat().st_mtime)
+        except OSError:
+            continue
+    return max(times)
+
+
 class KubernetesUnavailableError(RuntimeError):
     """Raised when the `kubernetes` package or cluster config is missing.
 
@@ -257,6 +425,8 @@ def build_job_manifest(
       source code must never land on it.
     * `GITHUB_TOKEN` (when present) arrives via `secretKeyRef`, never as a
       literal env value baked into this manifest.
+    * The PVC is mounted with `subPath: .jobs/<review_id>`: the worker sees
+      its own folder as `/reports` and nothing else on the volume.
     """
     env = [
         {"name": "REPO_URL", "value": repo_url},
@@ -338,7 +508,8 @@ def build_job_manifest(
                             "limits": {"cpu": "2", "memory": "4Gi"},
                         },
                         "volumeMounts": [
-                            {"name": "reports", "mountPath": "/reports"},
+                            {"name": "reports", "mountPath": "/reports",
+                             "subPath": job_subpath(review_id)},
                             {"name": "workspace", "mountPath": "/workspace"},
                             {"name": "tmp", "mountPath": "/tmp"},
                         ],
@@ -390,6 +561,66 @@ class KubernetesJobStore:
         # that needs one. Same rules as the clone token: memory only, never
         # serialized, forgotten when the job ends.
         self._llm_keys: dict[str, str] = {}
+        # Per review: (size, mtime) of each file last copied out of its
+        # Job's folder, so an unchanged checkpoint is not copied every poll.
+        self._synced: dict[str, dict[str, tuple[int, int]]] = {}
+
+    # ---------------- the Job's own folder on the PVC ----------------
+
+    def _sync(self, job: Job) -> None:
+        with self._lock:
+            seen = self._synced.setdefault(job.review_id, {})
+        sync_job_dir(self.cfg.output_dir, job.review_id, seen)
+
+    def _settle(self, job: Job) -> None:
+        """After a poll ends: a review that is over has nothing left in its
+        folder that is not already copied out, so the folder goes. A paused
+        one keeps it: its worker may still be writing a last checkpoint as
+        it shuts down, and the sweeper copies that out and removes the
+        folder later. So does one being retried, for its next attempt."""
+        with self._lock:
+            over = job.status in ("completed", "failed", "cancelled")
+            if over:
+                self._synced.pop(job.review_id, None)
+        if over:
+            remove_job_dir(self.cfg.output_dir, job.review_id)
+
+    def start_sweeper(self) -> None:
+        """Keep syncing the folders of Jobs no poller here watches.
+
+        A poller lives in this process's memory, so after a restart a Job
+        that is still running writes into its folder with nobody copying
+        it out: its progress and its report would never show. Not started
+        by __init__, so a store built in a test runs no thread.
+        """
+        threading.Thread(target=self._sweep_forever, daemon=True,
+                         name="job-folder-sweeper").start()
+
+    def _sweep_forever(self) -> None:
+        while True:
+            time.sleep(SWEEP_SECONDS)
+            try:
+                self.sweep()
+            except Exception:  # noqa: BLE001 - the sweeper must keep running
+                logger.warning("job folder sweep failed", exc_info=True)
+
+    def sweep(self) -> None:
+        """One pass: sync every folder whose review no poller watches, and
+        remove one nothing has written to for STALE_PROGRESS_SECONDS (its
+        Job is long gone and everything in it has been copied out)."""
+        root = Path(self.cfg.output_dir) / JOBS_SUBDIR
+        if not root.is_dir():
+            return
+        for folder in root.iterdir():
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            review_id = folder.name
+            job = self.get(review_id)
+            if job is not None and job.status in ACTIVE:
+                continue                     # its poller does this
+            sync_job_dir(self.cfg.output_dir, review_id)
+            if _wall_clock() - _newest_write(folder) > STALE_PROGRESS_SECONDS:
+                remove_job_dir(self.cfg.output_dir, review_id)
 
     # ---------------- lookup (identical contract to JobStore) ----------------
 
@@ -425,11 +656,13 @@ class KubernetesJobStore:
             if job is not None and job.status in ACTIVE:
                 return False
             self._by_review_id.pop(review_id, None)
+            self._synced.pop(review_id, None)
             if job_id:
                 self._jobs.pop(job_id, None)
                 self._tokens.pop(job_id, None)
                 self._llm_keys.pop(job_id, None)
-            return True
+        remove_job_dir(self.cfg.output_dir, review_id)
+        return True
 
     # ---------------- creation ----------------
 
@@ -556,6 +789,14 @@ class KubernetesJobStore:
         except OSError:
             logger.warning("could not remove a stale error file for %s",
                            job.review_id, exc_info=True)
+        try:
+            prepare_job_dir(self.cfg.output_dir, job.review_id)
+        except OSError as exc:
+            self._cleanup(None, secret_name)
+            self._finish(job, status="failed", error=(
+                "could not create the review's folder on the reports "
+                f"volume: {exc.strerror or exc}"))
+            return
         manifest = build_job_manifest(
             k8s_job_name=k8s_job_name, review_id=job.review_id,
             repo_url=job.repo_url, mode=job.mode,
@@ -611,6 +852,15 @@ class KubernetesJobStore:
 
     def _poll(self, job: Job, k8s_job_name: str,
               secret_name: str | None) -> None:
+        """Watch one attempt (`_watch`), then tidy its folder on the PVC."""
+        try:
+            self._watch(job, k8s_job_name, secret_name)
+        finally:
+            self._sync(job)
+            self._settle(job)
+
+    def _watch(self, job: Job, k8s_job_name: str,
+               secret_name: str | None) -> None:
         """Watch one Kubernetes Job attempt to a terminal state.
 
         Polling, not a callback FROM the Job (2026-09-19 decision): this
@@ -679,6 +929,8 @@ class KubernetesJobStore:
                     return
                 continue
             errors = 0
+            # Before anything below reads the worker's files.
+            self._sync(job)
 
             if status.succeeded:
                 self._cleanup(k8s_job_name, secret_name)
@@ -882,7 +1134,9 @@ def create_store(cfg):
 
     mode = os.getenv("REVIEW_API_EXECUTION_MODE", "local").strip().lower()
     if mode == "kubernetes":
-        return KubernetesJobStore(cfg, namespace=DEFAULT_NAMESPACE)
+        store = KubernetesJobStore(cfg, namespace=DEFAULT_NAMESPACE)
+        store.start_sweeper()
+        return store
     if mode != "local":
         raise ValueError(
             f"REVIEW_API_EXECUTION_MODE must be 'local' or 'kubernetes', "

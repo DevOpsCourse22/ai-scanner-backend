@@ -117,7 +117,10 @@ These are the settings `k8s_jobs.build_job_manifest()` already uses:
   - `/workspace` (emptyDir): `TMPDIR`, the clone, `HOME`, Semgrep's
     `~/.semgrep`, Trivy's DB cache (`TRIVY_CACHE_DIR`). The worker creates
     these at start-up, because an emptyDir starts empty.
-  - `/reports` (the PVC): reports and checkpoints only, never source code
+  - `/reports` (the PVC): reports and checkpoints only, never source code.
+    Only the review's OWN folder of it (`subPath: .jobs/<review_id>`): the
+    Job cannot see any other review's files. review-api copies what is
+    written there to the flat `/reports/<id>.*` it reads (`sync_job_dir`).
   - `/tmp` (emptyDir): mounted by the Job as a backstop
 - `capabilities: drop [ALL]`, `allowPrivilegeEscalation: false`
 - `git safe.directory '*'` is in the **system** config (`/etc/gitconfig`),

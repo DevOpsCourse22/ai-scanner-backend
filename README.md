@@ -267,6 +267,11 @@ a token, the server-wide `GITHUB_TOKEN` is used.
 - **Non-root, read-only-root capable.** The image runs as uid 10001 and needs
   write access only to `/reports` and `/tmp`.
 - **One review at a time** by design; a second request gets `409 busy`.
+- **In kubernetes mode each review Job sees only its own folder** of the
+  reports volume (`.jobs/<review_id>/`, mounted with `subPath`), never
+  another user's reports. review-api copies the files out on every poll,
+  without following links, and a sweeper does the same for Jobs it no
+  longer tracks after a restart (`k8s_jobs.sync_job_dir`).
 - **In-memory job registry.** A restart loses job records but not reports or
   checkpoints — those are on the volume, and `/api/v1/reports` reads them
   from disk.
